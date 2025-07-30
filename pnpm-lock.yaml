@@ -14,6 +14,9 @@ importers:
       aws4fetch:
         specifier: ^1.0.20
         version: 1.0.20
+      zod:
+        specifier: ^4.0.13
+        version: 4.0.13
     devDependencies:
       '@cloudflare/vitest-pool-workers':
         specifier: ^0.8.58
@@ -1103,6 +1106,9 @@ packages:
   zod@3.25.76:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
+  zod@4.0.13:
+    resolution: {integrity: sha512-jv+zRxuZQxTrFHzxZ46ezL2FtnE+M4HIJHJEwLsZ7UjrXHltdG6HrxvqM0twoVCWxJiYf8WqKjAcjztegpkB+Q==}
+
 snapshots:
 
   '@cloudflare/kv-asset-handler@0.4.0':
@@ -2001,3 +2007,5 @@ snapshots:
   zod@3.22.3: {}
 
   zod@3.25.76: {}
+
+  zod@4.0.13: {}

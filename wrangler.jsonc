@@ -41,7 +41,7 @@
 		"R2_S3_READ_WRITE_KEY_ID": "<secret_key_id>",
 		"R2_S3_READ_WRITE_SECRET_KEY": "<secret_key>",
 		"R2_S3_BUCKET": "<bucket>",
-		"R2_S3_ENDPOINT": "<account>.r2.cloudflarestorage.com"
+		"R2_S3_ENDPOINT": "<endpoint>"
 	}
 
 	/**
