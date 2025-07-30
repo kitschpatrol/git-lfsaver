@@ -214,7 +214,8 @@ function getPersonalAccessToken(request: Request): string | undefined {
 	}
 
 	try {
-		const decoded = Buffer.from(encoded, 'base64').toString('utf8')
+		// eslint-disable-next-line no-restricted-globals
+		const decoded = atob(encoded)
 
 		// Check for control characters before normalization
 		// eslint-disable-next-line no-control-regex

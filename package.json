@@ -28,7 +28,7 @@
 	"type": "module",
 	"scripts": {
 		"clean": "git rm -f pnpm-lock.yaml ; git clean -fdX",
-		"deploy": "wrangler deploy",
+		"deploy": "wrangler deploy --keep-vars",
 		"dev": "wrangler types && wrangler dev",
 		"fix": "kpi fix",
 		"lint": "kpi lint",

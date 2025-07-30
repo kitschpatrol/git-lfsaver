@@ -2,3 +2,8 @@ ignoredBuiltDependencies:
   - oxc-resolver
   - puppeteer
   - unrs-resolver
+
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+  - workerd

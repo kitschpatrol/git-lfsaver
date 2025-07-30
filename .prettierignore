@@ -6,3 +6,4 @@ pnpm-lock.yaml
 package-lock.json
 
 # Customizations
+worker-configuration.d.ts
