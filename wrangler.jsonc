@@ -13,6 +13,13 @@
 	"dev": {
 		"local_protocol": "https"
 	},
+
+	"routes": [
+		{
+			"pattern": "lfs.kitschpatrol.com",
+			"custom_domain": true
+		}
+	],
 	/**
 	 * Bindings
 	 * Bindings allow your Worker to interact with resources on the Cloudflare Developer Platform, including
