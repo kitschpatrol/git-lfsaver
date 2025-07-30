@@ -10,10 +10,10 @@
 	"observability": {
 		"enabled": true
 	},
+	"preview_urls": false,
 	"dev": {
 		"local_protocol": "https"
 	},
-
 	"routes": [
 		{
 			"pattern": "lfs.kitschpatrol.com",
