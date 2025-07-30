@@ -1,13 +1,38 @@
 {
 	"name": "git-lfs-cf",
-	"version": "0.0.0",
+	"version": "0.0.1",
 	"private": true,
+	"description": "A serverless Git LFS server for Cloudflare Workers + R2",
+	"keywords": [
+		"git",
+		"lfs",
+		"git-lfs",
+		"github",
+		"cloudflare",
+		"workers",
+		"r2",
+		"s3"
+	],
+	"homepage": "https://github.com/kitschpatrol/git-lfs-cf",
+	"bugs": "https://github.com/kitschpatrol/git-lfs-cf/issues",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/kitschpatrol/git-lfs-cf.git"
+	},
+	"license": "MIT",
+	"author": {
+		"name": "Eric Mika",
+		"email": "eric@ericmika.com",
+		"url": "https://ericmika.com"
+	},
+	"type": "module",
 	"scripts": {
+		"clean": "git rm -f pnpm-lock.yaml ; git clean -fdX",
 		"deploy": "wrangler deploy",
-		"dev": "wrangler dev",
-		"start": "wrangler dev",
-		"test": "vitest",
-		"cf-typegen": "wrangler types"
+		"dev": "wrangler types && wrangler dev",
+		"fix": "kpi fix",
+		"lint": "kpi lint",
+		"test": "vitest"
 	},
 	"dependencies": {
 		"@octokit/rest": "^22.0.0",
@@ -16,6 +41,7 @@
 	},
 	"devDependencies": {
 		"@cloudflare/vitest-pool-workers": "^0.8.58",
+		"@kitschpatrol/shared-config": "^5.5.0",
 		"typescript": "^5.8.3",
 		"vitest": "~3.2.4",
 		"wrangler": "^4.26.1"

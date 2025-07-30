@@ -8,17 +8,17 @@
 	"main": "src/index.ts",
 	"compatibility_date": "2025-07-26",
 	"observability": {
-		"enabled": true
+		"enabled": true,
 	},
 	"preview_urls": false,
 	"dev": {
-		"local_protocol": "https"
+		"local_protocol": "https",
 	},
 	"routes": [
 		{
 			"pattern": "lfs.kitschpatrol.com",
-			"custom_domain": true
-		}
+			"custom_domain": true,
+		},
 	],
 	/**
 	 * Bindings
@@ -37,12 +37,22 @@
 	 * Environment Variables
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
 	 */
+
+	"tsconfig": "tsconfig.build.json",
 	"vars": {
 		"R2_S3_READ_WRITE_KEY_ID": "<secret_key_id>",
 		"R2_S3_READ_WRITE_SECRET_KEY": "<secret_key>",
 		"R2_S3_BUCKET": "<bucket>",
-		"R2_S3_ENDPOINT": "<endpoint>"
-	}
+		"R2_S3_ENDPOINT": "<endpoint>",
+		/* Some clients might not set headers correctly... */
+		"ENFORCE_MIME": true,
+		/* Pre-signed URL expiry in seconds */
+		"EXPIRY": 3600,
+		/* Maximum file size in bytes, storage-dependent
+		 * See https://developers.cloudflare.com/r2/platform/limits/
+		 */
+		"MAX_FILE_SIZE": 4995000000,
+	},
 
 	/**
 	 * Note: Use secrets to store sensitive data.
