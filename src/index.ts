@@ -33,11 +33,11 @@ export default {
 					},
 				)
 			}
-			return new Response(
-				JSON.stringify({
+			return Response.json(
+				{
 					message: 'Only GET requests are allowed at the LFS server root.',
 					request_id: requestId,
-				}),
+				},
 				{
 					headers: { Allow: 'GET' },
 					status: 405,
@@ -58,8 +58,8 @@ export default {
 
 		// All LFS requests are POSTs
 		if (request.method !== 'POST') {
-			return new Response(
-				JSON.stringify({ message: 'Only POST requests are allowed.', request_id: requestId }),
+			return Response.json(
+				{ message: 'Only POST requests are allowed.', request_id: requestId },
 				{
 					headers: { Allow: 'POST' },
 					status: 405,
@@ -73,24 +73,24 @@ export default {
 			(!request.headers.get('Accept')?.startsWith(mime) ||
 				!request.headers.get('Content-Type')?.startsWith(mime))
 		) {
-			return new Response(
-				JSON.stringify({
+			return Response.json(
+				{
 					message: `Invalid request headers, expect "Accept: ${mime}" and "Content-Type: ${mime}", received "${request.headers.get(
 						'Accept',
 					)}" and "${request.headers.get('Content-Type')}"`,
 					request_id: requestId,
-				}),
+				},
 				{ status: 406 },
 			)
 		}
 
 		// Locking not yet supported
 		if (url.pathname.endsWith('/locks/verify')) {
-			return new Response(
-				JSON.stringify({
+			return Response.json(
+				{
 					message: 'This LFS server does not support locking. (Yet...)',
 					request_id: requestId,
-				}),
+				},
 				{ headers: { Allow: 'POST' }, status: 405 },
 			)
 		}
@@ -101,11 +101,11 @@ export default {
 			const owner = decodeURIComponent(pathParts[1])
 			const repo = decodeURIComponent(pathParts[2])
 			if (owner.length === 0 || repo.length === 0) {
-				return new Response(
-					JSON.stringify({
+				return Response.json(
+					{
 						message: `Invalid request URL pathname, expect "/<owner>/<repo>/objects/batch", received "${url.pathname}" Double check your lfs.url value in your .lfsconfig file.`,
 						request_id: requestId,
-					}),
+					},
 					{ status: 422 },
 				)
 			}
@@ -114,8 +114,8 @@ export default {
 			const rawClientRequest = await request.json()
 			const result = gitLfsBatchRequestSchema.safeParse(rawClientRequest)
 			if (!result.success) {
-				return new Response(
-					JSON.stringify({ message: z.prettifyError(result.error), request_id: requestId }),
+				return Response.json(
+					{ message: z.prettifyError(result.error), request_id: requestId },
 					{ status: 422 },
 				)
 			}
@@ -124,11 +124,11 @@ export default {
 			const personalAccessToken = getPersonalAccessToken(request)
 
 			if (personalAccessToken === undefined) {
-				return new Response(
-					JSON.stringify({
+				return Response.json(
+					{
 						message: 'No GitHub Personal Access Token provided.',
 						request_id: requestId,
-					}),
+					},
 					{
 						status: 401,
 					},
@@ -137,22 +137,22 @@ export default {
 
 			const repoInfo = await getGitHubRepoInfo(owner, repo, personalAccessToken)
 			if (repoInfo === undefined) {
-				return new Response(
-					JSON.stringify({
+				return Response.json(
+					{
 						message: `No GitHub repository found for owner "${owner}/${repo}".`,
 						request_id: requestId,
-					}),
+					},
 					{ status: 404 },
 				)
 			}
 
 			const isAuthorized = checkAuthorization(repoInfo, operation)
 			if (!isAuthorized) {
-				return new Response(
-					JSON.stringify({
+				return Response.json(
+					{
 						message: `Not authorized to ${operation} ib repository "${owner}/${repo}". Check permissions on your GitHub personal access token.`,
 						request_id: requestId,
-					}),
+					},
 					{ status: 401 },
 				)
 			}
@@ -178,16 +178,16 @@ export default {
 
 			const responseResult = gitLfsBatchResponseSchema.safeParse(response)
 			if (!responseResult.success) {
-				return new Response(
-					JSON.stringify({
+				return Response.json(
+					{
 						message: `Server created bad response:\n${z.prettifyError(responseResult.error)}`,
 						request_id: requestId,
-					}),
+					},
 					{ status: 422 },
 				)
 			}
 
-			return new Response(JSON.stringify(response), {
+			return Response.json(response, {
 				headers: {
 					'Cache-Control': 'no-store',
 					'Content-Type': mime,
@@ -196,9 +196,12 @@ export default {
 			})
 		}
 
-		return new Response(JSON.stringify({ message: 'Not found.', request_id: requestId }), {
-			status: 404,
-		})
+		return Response.json(
+			{ message: 'Not found.', request_id: requestId },
+			{
+				status: 404,
+			},
+		)
 	},
 } satisfies ExportedHandler<Env>
 

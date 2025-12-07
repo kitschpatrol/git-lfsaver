@@ -37,13 +37,13 @@
 	"dependencies": {
 		"@octokit/rest": "^22.0.1",
 		"aws4fetch": "^1.0.20",
-		"zod": "^4.1.12"
+		"zod": "^4.1.13"
 	},
 	"devDependencies": {
-		"@cloudflare/vitest-pool-workers": "^0.10.4",
-		"@kitschpatrol/shared-config": "^5.8.1",
+		"@cloudflare/vitest-pool-workers": "^0.10.14",
+		"@kitschpatrol/shared-config": "^5.10.0",
 		"typescript": "^5.9.3",
 		"vitest": "^3.2.4",
-		"wrangler": "^4.45.4"
+		"wrangler": "^4.53.0"
 	}
 }
