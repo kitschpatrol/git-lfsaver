@@ -27,23 +27,31 @@
 	},
 	"type": "module",
 	"scripts": {
-		"clean": "git rm -f pnpm-lock.yaml ; git clean -fdX",
-		"deploy": "wrangler deploy --keep-vars",
+		"clean": "shx rm -f pnpm-lock.yaml && git clean -fdX -e !.claude/",
+		"deploy": "wrangler deploy --secrets-file .env",
 		"dev": "wrangler types && wrangler dev",
-		"fix": "kpi fix",
-		"lint": "kpi lint",
-		"test": "vitest"
+		"fix": "ksc fix --skip repo",
+		"init": "op inject -i .template.env -o .env",
+		"lint": "ksc lint --skip repo",
+		"test": "vitest run"
 	},
 	"dependencies": {
 		"@octokit/rest": "^22.0.1",
 		"aws4fetch": "^1.0.20",
-		"zod": "^4.1.13"
+		"zod": "^4.4.3"
 	},
 	"devDependencies": {
-		"@cloudflare/vitest-pool-workers": "^0.10.14",
-		"@kitschpatrol/shared-config": "^5.10.0",
-		"typescript": "^5.9.3",
-		"vitest": "^3.2.4",
-		"wrangler": "^4.53.0"
+		"@cloudflare/vitest-pool-workers": "^0.10.15",
+		"@kitschpatrol/shared-config": "^8.5.0",
+		"shx": "^0.4.0",
+		"typescript": "^6.0.3",
+		"vitest": "^3.2.7",
+		"wrangler": "^4.116.0"
+	},
+	"devEngines": {
+		"runtime": {
+			"name": "node",
+			"version": ">=24.16.0"
+		}
 	}
 }

@@ -44,7 +44,7 @@ export { gitLfsBatchRequestSchema, gitLfsObjectSchema, gitLfsRefSchema }
  */
 
 // RFC 3339 timestamp regex pattern
-const rfc3339Pattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/
+const rfc3339Pattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/v
 
 // Action definition schema
 const actionSchema = z

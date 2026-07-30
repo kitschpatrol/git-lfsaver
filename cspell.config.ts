@@ -2,5 +2,5 @@ import { cspellConfig } from '@kitschpatrol/cspell-config'
 
 export default cspellConfig({
 	ignorePaths: ['worker-configuration.d.ts'],
-	words: ['locksverify', 'refspec'],
+	words: ['locksverify', 'miniflare'],
 })

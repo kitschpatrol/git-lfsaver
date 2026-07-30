@@ -1,5 +1,4 @@
 /* eslint-disable ts/naming-convention */
-/* eslint-disable node/no-unsupported-features/node-builtins */
 
 import type { RestEndpointMethodTypes } from '@octokit/rest'
 import { Octokit } from '@octokit/rest'
@@ -15,6 +14,9 @@ import { gitLfsBatchRequestSchema, gitLfsBatchResponseSchema } from './schemas'
 type GitHubRepoInfo = RestEndpointMethodTypes['repos']['get']['response']['data']
 
 const mime = 'application/vnd.git-lfs+json'
+
+// eslint-disable-next-line no-control-regex
+const controlCharacterRegex = /[\u{0}-\u{1F}\u{7F}]/v
 
 export default {
 	// eslint-disable-next-line complexity
@@ -33,6 +35,7 @@ export default {
 					},
 				)
 			}
+
 			return Response.json(
 				{
 					message: 'Only GET requests are allowed at the LFS server root.',
@@ -98,8 +101,8 @@ export default {
 		// Expect /<owner>/<repo>/objects/batch
 		const pathParts = url.pathname.split('/')
 		if (url.pathname.endsWith('/objects/batch') && pathParts.length >= 5) {
-			const owner = decodeURIComponent(pathParts[1])
-			const repo = decodeURIComponent(pathParts[2])
+			const owner = decodeURIComponent(pathParts[1] ?? '')
+			const repo = decodeURIComponent(pathParts[2] ?? '')
 			if (owner.length === 0 || repo.length === 0) {
 				return Response.json(
 					{
@@ -119,6 +122,7 @@ export default {
 					{ status: 422 },
 				)
 			}
+
 			const { hash_algo, objects, operation } = result.data
 
 			const personalAccessToken = getPersonalAccessToken(request)
@@ -150,7 +154,7 @@ export default {
 			if (!isAuthorized) {
 				return Response.json(
 					{
-						message: `Not authorized to ${operation} ib repository "${owner}/${repo}". Check permissions on your GitHub personal access token.`,
+						message: `Not authorized to ${operation} in repository "${owner}/${repo}". Check permissions on your GitHub personal access token.`,
 						request_id: requestId,
 					},
 					{ status: 401 },
@@ -207,12 +211,12 @@ export default {
 
 function getPersonalAccessToken(request: Request): string | undefined {
 	const authHeader = request.headers.get('Authorization')
-	if (!authHeader) {
+	if (authHeader === null || authHeader === '') {
 		return undefined
 	}
 
-	const [scheme, encoded] = authHeader.split(' ')
-	if (scheme !== 'Basic' || !encoded) {
+	const [scheme, encoded] = authHeader.split(' ', 2)
+	if (scheme !== 'Basic' || encoded === undefined || encoded === '') {
 		return undefined
 	}
 
@@ -221,8 +225,7 @@ function getPersonalAccessToken(request: Request): string | undefined {
 		const decoded = atob(encoded)
 
 		// Check for control characters before normalization
-		// eslint-disable-next-line no-control-regex
-		if (/[\u0000-\u001F\u007F]/.test(decoded)) {
+		if (controlCharacterRegex.test(decoded)) {
 			return undefined
 		}
 

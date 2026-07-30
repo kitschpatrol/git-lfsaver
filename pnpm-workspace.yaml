@@ -1,14 +1,3 @@
-ignoredBuiltDependencies:
-  - oxc-resolver
-  - puppeteer
-  - unrs-resolver
-
-onlyBuiltDependencies:
-  - esbuild
-  - sharp
-  - workerd
-
-# Required by @kitschpatrol/shared-config
 publicHoistPattern:
   - '@kitschpatrol/repo-config'
   - '@kitschpatrol/typescript-config'
@@ -20,3 +9,15 @@ publicHoistPattern:
   - '*prettier*'
   - '*remark*'
   - '*stylelint*'
+publishBranch: main
+allowBuilds:
+  esbuild: true
+  sharp: true
+  unrs-resolver: true
+  workerd: true
+minimumReleaseAgeExclude:
+  - '@kitschpatrol/*'
+  - '@cloudflare/*'
+  - miniflare
+  - workerd
+  - wrangler
