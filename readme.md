@@ -107,7 +107,7 @@ Designed to share authentication and access control with GitHub via a Personal A
 
 ## Acknowledgments
 
-Cloudflare workers approach inspired by [Milkey Mouse's](https://meme.institute/) [git-fs-s3-proxy](https://github.com/milkey-mouse/git-lfs-s3-proxy).
+Cloudflare workers approach inspired by [git-fs-s3-proxy](https://github.com/twilligon/git-lfs-s3-proxy).
 
 GitHub authentication strategy inspired by [Alan Edwardes'](https://alanedwardes.com/) [Estranged.Lfs](https://github.com/alanedwardes/Estranged.Lfs)
 
