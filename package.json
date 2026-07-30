@@ -27,6 +27,7 @@
 	},
 	"type": "module",
 	"scripts": {
+		"build": "echo 'No build necessary'",
 		"clean": "shx rm -f pnpm-lock.yaml && git clean -fdX -e !.claude/",
 		"deploy": "wrangler deploy --secrets-file .env",
 		"dev": "wrangler types && wrangler dev",
@@ -48,6 +49,7 @@
 		"vitest": "^3.2.7",
 		"wrangler": "^4.116.0"
 	},
+	"packageManager": "pnpm@11.15.0",
 	"devEngines": {
 		"runtime": {
 			"name": "node",
