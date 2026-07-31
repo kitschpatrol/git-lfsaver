@@ -4,6 +4,6 @@
 		"lib": ["ES2025"],
 		"types": ["@cloudflare/vitest-pool-workers/types"]
 	},
-	"include": ["./**/*.ts", "../worker-configuration.d.ts"],
+	"include": ["./**/*.ts", "../worker-configuration.d.ts", "../src/secrets.d.ts"],
 	"exclude": []
 }
