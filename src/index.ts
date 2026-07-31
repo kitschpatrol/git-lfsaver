@@ -113,6 +113,18 @@ export default {
 				)
 			}
 
+			// Reject repos outside the allowlist before doing any real work,
+			// otherwise anyone with a GitHub account can store objects in the bucket
+			if (!isOwnerAllowed(owner, env.ALLOWED_OWNERS)) {
+				return Response.json(
+					{
+						message: `Repository owner "${owner}" is not allowed to use this LFS server.`,
+						request_id: requestId,
+					},
+					{ status: 403 },
+				)
+			}
+
 			// Read and validate the request
 			const rawClientRequest = await request.json()
 			const result = gitLfsBatchRequestSchema.safeParse(rawClientRequest)
@@ -208,6 +220,17 @@ export default {
 		)
 	},
 } satisfies ExportedHandler<Env>
+
+function isOwnerAllowed(owner: string, allowedOwners: string): boolean {
+	// GitHub owner names are case-insensitive
+	const allowed = allowedOwners
+		.split(',')
+		.map((entry) => entry.trim().toLowerCase())
+		.filter((entry) => entry.length > 0)
+
+	// An empty allowlist rejects everyone (fail closed)
+	return allowed.includes(owner.toLowerCase())
+}
 
 function getPersonalAccessToken(request: Request): string | undefined {
 	const authHeader = request.headers.get('Authorization')

@@ -1,0 +1,24 @@
+# Throwaway workflow for step 1 of fable-improvement-plan-july-2026.md:
+# does GITHUB_TOKEN (a GitHub App installation token) get a meaningful
+# `permissions` field back from GET /repos/{owner}/{repo}?
+#
+# Run manually from the Actions tab, note the output, then delete this file.
+# All-false or missing permissions means the worker's checkAuthorization()
+# would deny CI, making the OIDC auth path required rather than optional.
+
+name: Test GITHUB_TOKEN permissions
+
+on: workflow_dispatch
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Query repo permissions as GITHUB_TOKEN
+        run: gh api "repos/$GITHUB_REPOSITORY" --jq .permissions
+        env:
+          GH_TOKEN: ${{ github.token }}

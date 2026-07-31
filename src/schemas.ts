@@ -8,11 +8,15 @@ const gitLfsRefSchema = z
 	})
 	.strict()
 
+// Lowercase hex SHA-256 only — anything else (e.g. "../<repoId>/<oid>") could
+// escape the repo prefix when the OID is embedded in a signed URL path
+const sha256OidPattern = /^[0-9a-f]{64}$/v
+
 const gitLfsObjectSchema = z
 	.object({
 		authenticated: z.boolean().optional(),
-		oid: z.string(), // String OID of the LFS object
-		size: z.number().min(0), // Integer byte size, must be at least zero
+		oid: z.string().regex(sha256OidPattern, 'Must be a lowercase hex SHA-256 OID'), // String OID of the LFS object
+		size: z.number().int().min(0), // Integer byte size, must be at least zero
 	})
 	.strict()
 
@@ -23,7 +27,7 @@ const gitLfsObjectSchema = z
  */
 const gitLfsBatchRequestSchema = z
 	.object({
-		hash_algo: z.string().default('sha256'), // Hash algorithm used to name Git LFS objects (defaults to 'sha256')
+		hash_algo: z.literal('sha256').default('sha256'), // Only sha256 is supported — OID validation depends on it
 		objects: z.array(gitLfsObjectSchema), // Array of objects to download/upload
 		operation: z.enum(['download', 'upload']), // Must be 'download' or 'upload'
 		ref: gitLfsRefSchema.optional(), // Optional object describing the server ref (added in v2.4)

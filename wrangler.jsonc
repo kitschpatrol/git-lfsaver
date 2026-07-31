@@ -39,11 +39,15 @@
 	 */
 
 	"tsconfig": "tsconfig.build.json",
+	/**
+	 * Non-secret config only. Values here keep their JSON types at runtime.
+	 * R2 credentials are uploaded as string secrets from .env (see .template.env)
+	 * and typed in src/secrets.d.ts.
+	 */
 	"vars": {
-		"R2_S3_READ_WRITE_KEY_ID": "<secret_key_id>",
-		"R2_S3_READ_WRITE_SECRET_KEY": "<secret_key>",
-		"R2_S3_BUCKET": "<bucket>",
-		"R2_S3_ENDPOINT": "<endpoint>",
+		/* Comma-separated GitHub owners (users or orgs) whose repos may use this
+		 * server. Empty rejects everyone. */
+		"ALLOWED_OWNERS": "kitschpatrol",
 		/* Some clients might not set headers correctly... */
 		"ENFORCE_MIME": true,
 		/* Pre-signed URL expiry in seconds */
