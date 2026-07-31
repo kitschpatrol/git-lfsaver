@@ -9,65 +9,56 @@ import type {
 	GitLfsBatchResponseErrorObject,
 	GitLfsBatchResponseObject,
 } from './schemas'
-import { gitLfsBatchRequestSchema, gitLfsBatchResponseSchema } from './schemas'
+import {
+	gitLfsBatchRequestSchema,
+	gitLfsBatchResponseSchema,
+	gitLfsVerifyRequestSchema,
+} from './schemas'
 
 type GitHubRepoInfo = RestEndpointMethodTypes['repos']['get']['response']['data']
 
+type GitHubRepoResult =
+	{ repoInfo: GitHubRepoInfo; type: 'found' } | { type: 'not-found' } | { type: 'unauthorized' }
+
+type AuthorizationResult = { errorResponse: Response } | { repoId: number }
+
+type ObjectContext = {
+	env: Env
+	readOnlyClient: AwsClient
+	readWriteClient: AwsClient
+	repoId: number
+	verifyUrl: string
+}
+
 const mime = 'application/vnd.git-lfs+json'
+
+// Tells git-lfs to prompt for Basic credentials instead of looping on a bare 401
+const unauthorizedHeaders = { 'LFS-Authenticate': 'Basic realm="Git LFS"' }
 
 // eslint-disable-next-line no-control-regex
 const controlCharacterRegex = /[\u{0}-\u{1F}\u{7F}]/v
 
 export default {
-	// eslint-disable-next-line complexity
 	async fetch(request, env, _context): Promise<Response> {
-		const requestId = request.headers.get('cf-request-id') ?? 'unknown'
+		const requestId = request.headers.get('cf-ray') ?? 'unknown'
 		const url = new URL(request.url)
 
-		if (url.pathname === '/') {
-			if (request.method === 'GET') {
-				return new Response(
-					'<!DOCTYPE html><html style="background-color:gray;"><head><meta charset="utf-8"><title>git-lfs-cf</title></head><body style="margin:0;padding:0;height:100vh;display:flex;align-items:center;justify-content:center"><h1 style="margin:0;font-size:6em">🪨</h1></body></html>',
-					{
-						headers: {
-							'Content-Type': 'text/html; charset=utf-8',
-						},
-					},
-				)
-			}
-
-			return Response.json(
-				{
-					message: 'Only GET requests are allowed at the LFS server root.',
-					request_id: requestId,
-				},
-				{
-					headers: { Allow: 'GET' },
-					status: 405,
-				},
-			)
+		const staticResponse = getStaticResponse(request, url, requestId)
+		if (staticResponse !== undefined) {
+			return staticResponse
 		}
 
-		if (url.pathname === '/favicon.ico') {
-			const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 16 16'><text x='0' y='14'>🪨</text></svg>`
-			return new Response(svg, {
-				headers: {
-					'Cache-Control': 'public, max-age=86400',
-					'Content-Type': 'image/svg+xml',
-				},
-				status: 200,
-			})
+		// Locking is not supported: 404 is the spec's signal for that, and makes
+		// clients disable lock verification automatically
+		if (url.pathname.endsWith('/locks') || url.pathname.includes('/locks/')) {
+			return lfsErrorResponse('This LFS server does not support locking.', requestId, 404)
 		}
 
 		// All LFS requests are POSTs
 		if (request.method !== 'POST') {
-			return Response.json(
-				{ message: 'Only POST requests are allowed.', request_id: requestId },
-				{
-					headers: { Allow: 'POST' },
-					status: 405,
-				},
-			)
+			return lfsErrorResponse('Only POST requests are allowed.', requestId, 405, {
+				Allow: 'POST',
+			})
 		}
 
 		if (
@@ -76,150 +67,277 @@ export default {
 			(!request.headers.get('Accept')?.startsWith(mime) ||
 				!request.headers.get('Content-Type')?.startsWith(mime))
 		) {
-			return Response.json(
-				{
-					message: `Invalid request headers, expect "Accept: ${mime}" and "Content-Type: ${mime}", received "${request.headers.get(
-						'Accept',
-					)}" and "${request.headers.get('Content-Type')}"`,
-					request_id: requestId,
-				},
-				{ status: 406 },
+			return lfsErrorResponse(
+				`Invalid request headers, expect "Accept: ${mime}" and "Content-Type: ${mime}", received "${request.headers.get(
+					'Accept',
+				)}" and "${request.headers.get('Content-Type')}"`,
+				requestId,
+				406,
 			)
 		}
 
-		// Locking not yet supported
-		if (url.pathname.endsWith('/locks/verify')) {
-			return Response.json(
-				{
-					message: 'This LFS server does not support locking. (Yet...)',
-					request_id: requestId,
-				},
-				{ headers: { Allow: 'POST' }, status: 405 },
-			)
-		}
-
-		// Expect /<owner>/<repo>/objects/batch
+		// Expect /<owner>/<repo>/objects/<batch|verify>
 		const pathParts = url.pathname.split('/')
-		if (url.pathname.endsWith('/objects/batch') && pathParts.length >= 5) {
+		const isBatch = url.pathname.endsWith('/objects/batch')
+		const isVerify = url.pathname.endsWith('/objects/verify')
+		if ((isBatch || isVerify) && pathParts.length === 5) {
 			const owner = decodeURIComponent(pathParts[1] ?? '')
 			const repo = decodeURIComponent(pathParts[2] ?? '')
 			if (owner.length === 0 || repo.length === 0) {
-				return Response.json(
-					{
-						message: `Invalid request URL pathname, expect "/<owner>/<repo>/objects/batch", received "${url.pathname}" Double check your lfs.url value in your .lfsconfig file.`,
-						request_id: requestId,
-					},
-					{ status: 422 },
+				return lfsErrorResponse(
+					`Invalid request URL pathname, expect "/<owner>/<repo>/objects/batch", received "${url.pathname}" Double check your lfs.url value in your .lfsconfig file.`,
+					requestId,
+					422,
 				)
 			}
 
 			// Reject repos outside the allowlist before doing any real work,
 			// otherwise anyone with a GitHub account can store objects in the bucket
 			if (!isOwnerAllowed(owner, env.ALLOWED_OWNERS)) {
-				return Response.json(
-					{
-						message: `Repository owner "${owner}" is not allowed to use this LFS server.`,
-						request_id: requestId,
-					},
-					{ status: 403 },
+				return lfsErrorResponse(
+					`Repository owner "${owner}" is not allowed to use this LFS server.`,
+					requestId,
+					403,
 				)
 			}
 
-			// Read and validate the request
-			const rawClientRequest = await request.json()
-			const result = gitLfsBatchRequestSchema.safeParse(rawClientRequest)
-			if (!result.success) {
-				return Response.json(
-					{ message: z.prettifyError(result.error), request_id: requestId },
-					{ status: 422 },
-				)
-			}
+			return isBatch
+				? handleBatch(request, env, owner, repo, requestId)
+				: handleVerify(request, env, owner, repo, requestId)
+		}
 
-			const { hash_algo, objects, operation } = result.data
+		return lfsErrorResponse('Not found.', requestId, 404)
+	},
+} satisfies ExportedHandler<Env>
 
-			const personalAccessToken = getPersonalAccessToken(request)
-
-			if (personalAccessToken === undefined) {
-				return Response.json(
-					{
-						message: 'No GitHub Personal Access Token provided.',
-						request_id: requestId,
+function getStaticResponse(request: Request, url: URL, requestId: string): Response | undefined {
+	if (url.pathname === '/') {
+		if (request.method === 'GET') {
+			return new Response(
+				'<!DOCTYPE html><html style="background-color:gray;"><head><meta charset="utf-8"><title>git-lfs-cf</title></head><body style="margin:0;padding:0;height:100vh;display:flex;align-items:center;justify-content:center"><h1 style="margin:0;font-size:6em">🪨</h1></body></html>',
+				{
+					headers: {
+						'Content-Type': 'text/html; charset=utf-8',
 					},
-					{
-						status: 401,
-					},
-				)
-			}
-
-			const repoInfo = await getGitHubRepoInfo(owner, repo, personalAccessToken)
-			if (repoInfo === undefined) {
-				return Response.json(
-					{
-						message: `No GitHub repository found for owner "${owner}/${repo}".`,
-						request_id: requestId,
-					},
-					{ status: 404 },
-				)
-			}
-
-			const isAuthorized = checkAuthorization(repoInfo, operation)
-			if (!isAuthorized) {
-				return Response.json(
-					{
-						message: `Not authorized to ${operation} in repository "${owner}/${repo}". Check permissions on your GitHub personal access token.`,
-						request_id: requestId,
-					},
-					{ status: 401 },
-				)
-			}
-
-			// Used as directory prefix to prevent side-channel attacks
-			// while remaining robust to repo name changes
-			const repoId = repoInfo.id
-
-			const s3 = new AwsClient({
-				accessKeyId: env.R2_S3_READ_WRITE_KEY_ID,
-				secretAccessKey: env.R2_S3_READ_WRITE_SECRET_KEY,
-			})
-
-			const response: GitLfsBatchResponse = {
-				hash_algo,
-				objects: await Promise.all(
-					objects.map(async ({ oid, size }) =>
-						processObject(oid, size, operation, repoId, s3, env),
-					),
-				),
-				transfer: 'basic',
-			}
-
-			const responseResult = gitLfsBatchResponseSchema.safeParse(response)
-			if (!responseResult.success) {
-				return Response.json(
-					{
-						message: `Server created bad response:\n${z.prettifyError(responseResult.error)}`,
-						request_id: requestId,
-					},
-					{ status: 422 },
-				)
-			}
-
-			return Response.json(response, {
-				headers: {
-					'Cache-Control': 'no-store',
-					'Content-Type': mime,
 				},
-				status: 200,
-			})
+			)
 		}
 
 		return Response.json(
-			{ message: 'Not found.', request_id: requestId },
 			{
-				status: 404,
+				message: 'Only GET requests are allowed at the LFS server root.',
+				request_id: requestId,
+			},
+			{
+				headers: { Allow: 'GET' },
+				status: 405,
 			},
 		)
-	},
-} satisfies ExportedHandler<Env>
+	}
+
+	if (url.pathname === '/favicon.ico') {
+		const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 16 16'><text x='0' y='14'>🪨</text></svg>`
+		return new Response(svg, {
+			headers: {
+				'Cache-Control': 'public, max-age=86400',
+				'Content-Type': 'image/svg+xml',
+			},
+			status: 200,
+		})
+	}
+
+	return undefined
+}
+
+async function handleBatch(
+	request: Request,
+	env: Env,
+	owner: string,
+	repo: string,
+	requestId: string,
+): Promise<Response> {
+	// Read and validate the request
+	let rawClientRequest: unknown
+	try {
+		rawClientRequest = await request.json()
+	} catch {
+		return lfsErrorResponse('Request body is not valid JSON.', requestId, 422)
+	}
+
+	const result = gitLfsBatchRequestSchema.safeParse(rawClientRequest)
+	if (!result.success) {
+		return lfsErrorResponse(z.prettifyError(result.error), requestId, 422)
+	}
+
+	const { hash_algo, objects, operation } = result.data
+
+	const authorization = await authorizeRequest(request, owner, repo, operation, requestId)
+	if ('errorResponse' in authorization) {
+		return authorization.errorResponse
+	}
+
+	const context: ObjectContext = {
+		env,
+		...createR2Clients(env),
+		repoId: authorization.repoId,
+		verifyUrl: new URL(
+			`/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/objects/verify`,
+			request.url,
+		).href,
+	}
+
+	const response: GitLfsBatchResponse = {
+		hash_algo,
+		objects: await Promise.all(
+			objects.map(async ({ oid, size }) => processObject(oid, size, operation, context)),
+		),
+		transfer: 'basic',
+	}
+
+	const responseResult = gitLfsBatchResponseSchema.safeParse(response)
+	if (!responseResult.success) {
+		return lfsErrorResponse(
+			`Server created bad response:\n${z.prettifyError(responseResult.error)}`,
+			requestId,
+			500,
+		)
+	}
+
+	return Response.json(response, {
+		headers: {
+			'Cache-Control': 'no-store',
+			'Content-Type': mime,
+		},
+		status: 200,
+	})
+}
+
+async function handleVerify(
+	request: Request,
+	env: Env,
+	owner: string,
+	repo: string,
+	requestId: string,
+): Promise<Response> {
+	// Read and validate the request
+	let rawClientRequest: unknown
+	try {
+		rawClientRequest = await request.json()
+	} catch {
+		return lfsErrorResponse('Request body is not valid JSON.', requestId, 422)
+	}
+
+	const result = gitLfsVerifyRequestSchema.safeParse(rawClientRequest)
+	if (!result.success) {
+		return lfsErrorResponse(z.prettifyError(result.error), requestId, 422)
+	}
+
+	// Verification happens right after upload, so require the same permission
+	const authorization = await authorizeRequest(request, owner, repo, 'upload', requestId)
+	if ('errorResponse' in authorization) {
+		return authorization.errorResponse
+	}
+
+	const { oid, size } = result.data
+	const { readOnlyClient } = createR2Clients(env)
+	const headResponse = await readOnlyClient.fetch(getObjectUrl(env, authorization.repoId, oid), {
+		method: 'HEAD',
+	})
+
+	if (headResponse.status !== 200) {
+		return lfsErrorResponse(
+			`Object "${oid}" was not found in storage. The upload may have failed, try pushing again.`,
+			requestId,
+			404,
+		)
+	}
+
+	const storedSize = Number(headResponse.headers.get('content-length'))
+	if (storedSize !== size) {
+		return lfsErrorResponse(
+			`Object "${oid}" has stored size ${storedSize}, expected ${size}. Try pushing again.`,
+			requestId,
+			422,
+		)
+	}
+
+	return Response.json(
+		{ message: 'Object verified.', request_id: requestId },
+		{
+			headers: { 'Content-Type': mime },
+			status: 200,
+		},
+	)
+}
+
+async function authorizeRequest(
+	request: Request,
+	owner: string,
+	repo: string,
+	operation: 'download' | 'upload',
+	requestId: string,
+): Promise<AuthorizationResult> {
+	const personalAccessToken = getPersonalAccessToken(request)
+	if (personalAccessToken === undefined) {
+		return {
+			errorResponse: lfsErrorResponse(
+				'No GitHub Personal Access Token provided.',
+				requestId,
+				401,
+				unauthorizedHeaders,
+			),
+		}
+	}
+
+	const repoResult = await getGitHubRepoInfo(owner, repo, personalAccessToken)
+	if (repoResult.type === 'unauthorized') {
+		return {
+			errorResponse: lfsErrorResponse(
+				'GitHub rejected the provided credentials.',
+				requestId,
+				401,
+				unauthorizedHeaders,
+			),
+		}
+	}
+
+	if (repoResult.type === 'not-found') {
+		return {
+			errorResponse: lfsErrorResponse(
+				`No GitHub repository found for "${owner}/${repo}".`,
+				requestId,
+				404,
+			),
+		}
+	}
+
+	const isAuthorized = checkAuthorization(repoResult.repoInfo, operation)
+	if (!isAuthorized) {
+		return {
+			errorResponse: lfsErrorResponse(
+				`Not authorized to ${operation} in repository "${owner}/${repo}". Check permissions on your GitHub personal access token.`,
+				requestId,
+				403,
+			),
+		}
+	}
+
+	// Used as directory prefix to prevent side-channel attacks
+	// while remaining robust to repo name changes
+	return { repoId: repoResult.repoInfo.id }
+}
+
+function lfsErrorResponse(
+	message: string,
+	requestId: string,
+	status: number,
+	headers: Record<string, string> = {},
+): Response {
+	return Response.json(
+		{ message, request_id: requestId },
+		{ headers: { 'Content-Type': mime, ...headers }, status },
+	)
+}
 
 function isOwnerAllowed(owner: string, allowedOwners: string): boolean {
 	// GitHub owner names are case-insensitive
@@ -271,15 +389,21 @@ async function getGitHubRepoInfo(
 	owner: string,
 	repo: string,
 	personalAccessToken: string,
-): Promise<GitHubRepoInfo | undefined> {
+): Promise<GitHubRepoResult> {
 	try {
 		const octokit = new Octokit({
 			auth: personalAccessToken,
 		})
 		const { data } = await octokit.repos.get({ owner, repo })
-		return data
-	} catch {
-		return undefined
+		return { repoInfo: data, type: 'found' }
+	} catch (error) {
+		// Distinguish bad credentials from missing/inaccessible repos so clients
+		// get a credential prompt rather than a misleading 404
+		if (typeof error === 'object' && error !== null && 'status' in error && error.status === 401) {
+			return { type: 'unauthorized' }
+		}
+
+		return { type: 'not-found' }
 	}
 }
 
@@ -299,19 +423,44 @@ function checkAuthorization(repoInfo: GitHubRepoInfo, operation: 'download' | 'u
 	return true
 }
 
+function createR2Clients(env: Env): { readOnlyClient: AwsClient; readWriteClient: AwsClient } {
+	return {
+		readOnlyClient: new AwsClient({
+			accessKeyId: env.R2_S3_READ_KEY_ID,
+			secretAccessKey: env.R2_S3_READ_SECRET_KEY,
+		}),
+		readWriteClient: new AwsClient({
+			accessKeyId: env.R2_S3_READ_WRITE_KEY_ID,
+			secretAccessKey: env.R2_S3_READ_WRITE_SECRET_KEY,
+		}),
+	}
+}
+
+function getObjectUrl(env: Env, repoId: number, oid: string): string {
+	return `https://${env.R2_S3_BUCKET}.${env.R2_S3_ENDPOINT}/${repoId}/${oid}`
+}
+
 async function sign(
 	s3: AwsClient,
-	bucket: string,
-	endpoint: string,
+	env: Env,
 	path: string,
-	method: string,
-	expiry = 3600,
+	method: 'GET' | 'PUT',
+	contentLength?: number,
 ): Promise<string> {
-	const url = new URL(`https://${bucket}.${endpoint}`)
+	const url = new URL(`https://${env.R2_S3_BUCKET}.${env.R2_S3_ENDPOINT}`)
 	url.pathname = path
-	url.searchParams.set('X-Amz-Expires', String(expiry))
+	url.searchParams.set('X-Amz-Expires', String(env.EXPIRY))
 
-	const signed = await s3.sign(new Request(url, { method }), { aws: { signQuery: true } })
+	// Signing content-length caps how many bytes the client can PUT with this
+	// URL; aws4fetch only signs it when allHeaders is set
+	const headers: Record<string, string> =
+		contentLength === undefined ? {} : { 'content-length': String(contentLength) }
+
+	const signed = await s3.sign(url.href, {
+		aws: { allHeaders: true, signQuery: true },
+		headers,
+		method,
+	})
 
 	return signed.url
 }
@@ -320,10 +469,10 @@ async function processObject(
 	oid: string,
 	size: number,
 	operation: 'download' | 'upload',
-	repoId: number,
-	s3: AwsClient,
-	env: Env,
+	context: ObjectContext,
 ): Promise<GitLfsBatchResponseErrorObject | GitLfsBatchResponseObject> {
+	const { env, readOnlyClient, readWriteClient, repoId, verifyUrl } = context
+
 	// Check for max size...
 	if (size > env.MAX_FILE_SIZE) {
 		return {
@@ -336,15 +485,13 @@ async function processObject(
 		} satisfies GitLfsBatchResponseErrorObject
 	}
 
-	// Check for missing object...
+	// One subrequest per object: existence check for downloads, dedup check for uploads
+	const headResponse = await readOnlyClient.fetch(getObjectUrl(env, repoId, oid), {
+		method: 'HEAD',
+	})
+
 	if (operation === 'download') {
-		const response = await s3.fetch(
-			`https://${env.R2_S3_BUCKET}.${env.R2_S3_ENDPOINT}/${repoId}/${oid}`,
-			{
-				method: 'HEAD',
-			},
-		)
-		if (response.status === 404) {
+		if (headResponse.status === 404) {
 			return {
 				error: {
 					code: 404,
@@ -354,22 +501,40 @@ async function processObject(
 				size,
 			} satisfies GitLfsBatchResponseErrorObject
 		}
+
+		const signedUrl = await sign(readOnlyClient, env, `${repoId}/${oid}`, 'GET')
+		return {
+			actions: {
+				download: {
+					expires_in: env.EXPIRY,
+					href: signedUrl,
+				},
+			},
+			authenticated: true,
+			oid,
+			size,
+		} satisfies GitLfsBatchResponseObject
 	}
 
-	const signedUrl = await sign(
-		s3,
-		env.R2_S3_BUCKET,
-		env.R2_S3_ENDPOINT,
-		`${repoId}/${oid}`,
-		operation === 'upload' ? 'PUT' : 'GET',
-		env.EXPIRY,
-	)
+	// Omitting actions tells the client the object is already stored and the
+	// upload can be skipped (the spec's dedup mechanism)
+	if (headResponse.status === 200 && Number(headResponse.headers.get('content-length')) === size) {
+		return {
+			authenticated: true,
+			oid,
+			size,
+		} satisfies GitLfsBatchResponseObject
+	}
 
+	const signedUrl = await sign(readWriteClient, env, `${repoId}/${oid}`, 'PUT', size)
 	return {
 		actions: {
-			[operation]: {
+			upload: {
 				expires_in: env.EXPIRY,
 				href: signedUrl,
+			},
+			verify: {
+				href: verifyUrl,
 			},
 		},
 		authenticated: true,

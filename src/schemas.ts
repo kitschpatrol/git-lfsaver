@@ -2,44 +2,53 @@
 
 import * as z from 'zod'
 
-const gitLfsRefSchema = z
-	.object({
-		name: z.string(), // Fully-qualified server refspec
-	})
-	.strict()
+// Request schemas are deliberately non-strict: unknown fields from future
+// clients are stripped rather than rejected. Response schemas stay strict.
+const gitLfsRefSchema = z.object({
+	name: z.string(), // Fully-qualified server refspec
+})
 
 // Lowercase hex SHA-256 only — anything else (e.g. "../<repoId>/<oid>") could
 // escape the repo prefix when the OID is embedded in a signed URL path
 const sha256OidPattern = /^[0-9a-f]{64}$/v
 
-const gitLfsObjectSchema = z
-	.object({
-		authenticated: z.boolean().optional(),
-		oid: z.string().regex(sha256OidPattern, 'Must be a lowercase hex SHA-256 OID'), // String OID of the LFS object
-		size: z.number().int().min(0), // Integer byte size, must be at least zero
-	})
-	.strict()
+const gitLfsObjectSchema = z.object({
+	authenticated: z.boolean().optional(),
+	oid: z.string().regex(sha256OidPattern, 'Must be a lowercase hex SHA-256 OID'), // String OID of the LFS object
+	size: z.number().int().min(0), // Integer byte size, must be at least zero
+})
 
 /**
  * HTTP Batch Request
  * https://github.com/git-lfs/git-lfs/blob/main/docs/api/batch.md#requests
  * https://github.com/git-lfs/git-lfs/blob/main/tq/schemas/http-batch-request-schema.json
  */
-const gitLfsBatchRequestSchema = z
-	.object({
-		hash_algo: z.literal('sha256').default('sha256'), // Only sha256 is supported — OID validation depends on it
-		objects: z.array(gitLfsObjectSchema), // Array of objects to download/upload
-		operation: z.enum(['download', 'upload']), // Must be 'download' or 'upload'
-		ref: gitLfsRefSchema.optional(), // Optional object describing the server ref (added in v2.4)
-		transfers: z.array(z.string()).optional(), // Optional array of transfer adapter identifiers (defaults to 'basic' if omitted)
-	})
-	.strict()
+const gitLfsBatchRequestSchema = z.object({
+	hash_algo: z.literal('sha256').default('sha256'), // Only sha256 is supported — OID validation depends on it
+	objects: z
+		.array(gitLfsObjectSchema)
+		.min(1) // The response schema requires at least one object, so require it here too
+		.max(100, 'Batch size exceeds the maximum of 100 objects'), // Matches the git-lfs client default, and each object can cost a subrequest against Workers limits
+	operation: z.enum(['download', 'upload']), // Must be 'download' or 'upload'
+	ref: gitLfsRefSchema.optional(), // Optional object describing the server ref (added in v2.4)
+	transfers: z.array(z.string()).optional(), // Optional array of transfer adapter identifiers (defaults to 'basic' if omitted)
+})
+
+/**
+ * Verification Request
+ * https://github.com/git-lfs/git-lfs/blob/main/docs/api/basic-transfers.md#verification
+ */
+const gitLfsVerifyRequestSchema = z.object({
+	oid: z.string().regex(sha256OidPattern, 'Must be a lowercase hex SHA-256 OID'),
+	size: z.number().int().min(0),
+})
 
 export type GitLfsRef = z.infer<typeof gitLfsRefSchema>
 export type GitLfsObject = z.infer<typeof gitLfsObjectSchema>
 export type GitLfsBatchRequest = z.infer<typeof gitLfsBatchRequestSchema>
+export type GitLfsVerifyRequest = z.infer<typeof gitLfsVerifyRequestSchema>
 
-export { gitLfsBatchRequestSchema, gitLfsObjectSchema, gitLfsRefSchema }
+export { gitLfsBatchRequestSchema, gitLfsObjectSchema, gitLfsRefSchema, gitLfsVerifyRequestSchema }
 
 /**
  * HTTP Batch Response
