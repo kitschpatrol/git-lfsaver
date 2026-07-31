@@ -17,6 +17,10 @@
 
 <!-- /short-description -->
 
+> [!WARNING]
+>
+> This repo has some issues, see [Fable's improvement plan](./fable-improvement-plan-july-2026.md) for possible remediation.
+
 ## Overview
 
 Currently supports private repositories only.

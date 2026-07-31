@@ -1,7 +1,7 @@
 {
 	"extends": "@kitschpatrol/typescript-config",
 	"compilerOptions": {
-		"types": ["./worker-configuration.d.ts", "./test/env.d.ts"]
+		"types": ["./worker-configuration.d.ts"]
 	},
 	"include": ["**/**.*"],
 	"exclude": ["test"]
