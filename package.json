@@ -39,6 +39,7 @@
 	"dependencies": {
 		"@octokit/rest": "^22.0.1",
 		"aws4fetch": "^1.0.20",
+		"jose": "6.2.6",
 		"zod": "^4.4.3"
 	},
 	"devDependencies": {

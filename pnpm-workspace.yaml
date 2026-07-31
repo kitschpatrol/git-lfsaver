@@ -21,3 +21,4 @@ minimumReleaseAgeExclude:
   - miniflare
   - workerd
   - wrangler
+  - jose@6.2.6

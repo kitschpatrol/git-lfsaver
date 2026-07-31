@@ -1,8 +1,10 @@
 /* eslint-disable ts/naming-convention */
 
 import type { RestEndpointMethodTypes } from '@octokit/rest'
+import type { JWTPayload } from 'jose'
 import { Octokit } from '@octokit/rest'
 import { AwsClient } from 'aws4fetch'
+import { createRemoteJWKSet, jwtVerify } from 'jose'
 import { z } from 'zod'
 import type {
 	GitLfsBatchResponse,
@@ -34,6 +36,17 @@ const mime = 'application/vnd.git-lfs+json'
 
 // Tells git-lfs to prompt for Basic credentials instead of looping on a bare 401
 const unauthorizedHeaders = { 'LFS-Authenticate': 'Basic realm="Git LFS"' }
+
+// GitHub Actions OIDC tokens are verified against this issuer's JWKS
+const githubActionsIssuer = 'https://token.actions.githubusercontent.com'
+
+let githubActionsJwks: ReturnType<typeof createRemoteJWKSet> | undefined
+
+function getGitHubActionsJwks(): ReturnType<typeof createRemoteJWKSet> {
+	// Cached at module level so fetched keys survive across requests in an isolate
+	githubActionsJwks ??= createRemoteJWKSet(new URL(`${githubActionsIssuer}/.well-known/jwks`))
+	return githubActionsJwks
+}
 
 // eslint-disable-next-line no-control-regex
 const controlCharacterRegex = /[\u{0}-\u{1F}\u{7F}]/v
@@ -277,11 +290,11 @@ async function authorizeRequest(
 	operation: 'download' | 'upload',
 	requestId: string,
 ): Promise<AuthorizationResult> {
-	const personalAccessToken = getPersonalAccessToken(request)
-	if (personalAccessToken === undefined) {
+	const credential = getCredential(request)
+	if (credential === undefined) {
 		return {
 			errorResponse: lfsErrorResponse(
-				'No GitHub Personal Access Token provided.',
+				'No GitHub credential provided. Send a personal access token or a GitHub Actions OIDC token as the Basic auth password.',
 				requestId,
 				401,
 				unauthorizedHeaders,
@@ -289,7 +302,18 @@ async function authorizeRequest(
 		}
 	}
 
-	const repoResult = await getGitHubRepoInfo(owner, repo, personalAccessToken)
+	if (isJsonWebToken(credential)) {
+		return authorizeGitHubActionsToken(
+			credential,
+			new URL(request.url).host,
+			owner,
+			repo,
+			operation,
+			requestId,
+		)
+	}
+
+	const repoResult = await getGitHubRepoInfo(owner, repo, credential)
 	if (repoResult.type === 'unauthorized') {
 		return {
 			errorResponse: lfsErrorResponse(
@@ -327,6 +351,81 @@ async function authorizeRequest(
 	return { repoId: repoResult.repoInfo.id }
 }
 
+async function authorizeGitHubActionsToken(
+	token: string,
+	audience: string,
+	owner: string,
+	repo: string,
+	operation: 'download' | 'upload',
+	requestId: string,
+): Promise<AuthorizationResult> {
+	let payload: JWTPayload
+	try {
+		const result = await jwtVerify(token, getGitHubActionsJwks(), {
+			algorithms: ['RS256'],
+			audience,
+			issuer: githubActionsIssuer,
+		})
+		payload = result.payload
+	} catch {
+		return {
+			errorResponse: lfsErrorResponse(
+				`GitHub Actions OIDC token verification failed. Request the token with audience "${audience}".`,
+				requestId,
+				401,
+				unauthorizedHeaders,
+			),
+		}
+	}
+
+	// The cryptographically verified repo identity must match the request path
+	const claimedRepo = payload.repository
+	if (
+		typeof claimedRepo !== 'string' ||
+		claimedRepo.toLowerCase() !== `${owner}/${repo}`.toLowerCase()
+	) {
+		return {
+			errorResponse: lfsErrorResponse(
+				`OIDC token was not issued for repository "${owner}/${repo}".`,
+				requestId,
+				403,
+			),
+		}
+	}
+
+	// CI has no need to push LFS objects, so OIDC access stays read-only
+	if (operation !== 'download') {
+		return {
+			errorResponse: lfsErrorResponse(
+				'GitHub Actions OIDC tokens are only authorized to download. Upload with a personal access token instead.',
+				requestId,
+				403,
+			),
+		}
+	}
+
+	// The same numeric repo ID the GitHub API reports, so both auth paths
+	// address the same storage namespace
+	const repoId = Number(payload.repository_id)
+	if (!Number.isInteger(repoId) || repoId <= 0) {
+		return {
+			errorResponse: lfsErrorResponse(
+				'OIDC token is missing a valid repository_id claim.',
+				requestId,
+				403,
+			),
+		}
+	}
+
+	return { repoId }
+}
+
+function isJsonWebToken(credential: string): boolean {
+	// GitHub PATs never contain dots; JWTs are three dot-separated base64url
+	// segments starting with the encoded {"alg"... header
+	return credential.startsWith('eyJ') && credential.split('.').length === 3
+}
+
 function lfsErrorResponse(
 	message: string,
 	requestId: string,
@@ -350,7 +449,7 @@ function isOwnerAllowed(owner: string, allowedOwners: string): boolean {
 	return allowed.includes(owner.toLowerCase())
 }
 
-function getPersonalAccessToken(request: Request): string | undefined {
+function getCredential(request: Request): string | undefined {
 	const authHeader = request.headers.get('Authorization')
 	if (authHeader === null || authHeader === '') {
 		return undefined
@@ -377,10 +476,10 @@ function getPersonalAccessToken(request: Request): string | undefined {
 			return undefined
 		}
 
-		// Extract and return the token (part after the colon)
+		// Extract and return the credential (part after the colon)
 		return normalized.slice(colonIndex + 1)
 	} catch {
-		// Buffer.from throws on invalid base64
+		// The atob call throws on invalid base64
 		return undefined
 	}
 }

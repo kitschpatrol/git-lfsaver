@@ -4,6 +4,7 @@
 import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test'
 // eslint-disable-next-line import/no-unresolved
 import { env } from 'cloudflare:workers'
+import { exportJWK, generateKeyPair, SignJWT } from 'jose'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import type {
@@ -27,10 +28,19 @@ const readWriteKeyId = 'test-write-key'
 // eslint-disable-next-line no-restricted-globals
 const authHeader = { Authorization: `Basic ${btoa('user:test-token')}` }
 
+// Key pair for signing test OIDC tokens; the public half is served by the
+// mocked GitHub JWKS endpoint
+const githubActionsIssuer = 'https://token.actions.githubusercontent.com'
+const { privateKey, publicKey } = await generateKeyPair('RS256')
+const publicJwk = { ...(await exportJWK(publicKey)), alg: 'RS256', kid: 'test-key' }
+
 // The worker under test runs in the same isolate as the tests, so stubbing
 // global fetch intercepts its outbound GitHub and R2 subrequests. Each mock is
-// consumed once, unmatched requests throw, and afterEach asserts none are left.
-const pendingMocks: Array<{ method: string; response: () => Response; url: string }> = []
+// consumed once (unless persistent), unmatched requests throw, and afterEach
+// asserts none are left.
+type FetchMock = { isPersistent?: boolean; method: string; response: () => Response; url: string }
+
+const pendingMocks: FetchMock[] = []
 
 beforeAll(() => {
 	vi.stubGlobal(
@@ -41,26 +51,37 @@ beforeAll(() => {
 			const index = pendingMocks.findIndex(
 				(mock) => mock.method === request.method && mock.url === request.url,
 			)
-			if (index === -1) {
+			const mock = index === -1 ? undefined : pendingMocks[index]
+			if (mock === undefined) {
 				throw new Error(`Unexpected fetch: ${request.method} ${request.url}`)
 			}
 
-			const [mock] = pendingMocks.splice(index, 1)
-			if (mock === undefined) {
-				throw new Error('Mock disappeared')
+			if (mock.isPersistent !== true) {
+				pendingMocks.splice(index, 1)
 			}
 
 			return mock.response()
 		},
 	)
+
+	// The worker's remote JWK set caches keys after the first fetch, so this
+	// mock persists rather than being consumed by whichever test verifies first
+	pendingMocks.push({
+		isPersistent: true,
+		method: 'GET',
+		response: () => Response.json({ keys: [publicJwk] }),
+		url: `${githubActionsIssuer}/.well-known/jwks`,
+	})
 })
 
 afterEach(() => {
-	// Every mocked route registered by a test must have been hit
-	const remaining = [...pendingMocks]
+	// Every single-use mocked route registered by a test must have been hit
+	const leftover = pendingMocks.filter((mock) => mock.isPersistent !== true)
+	const persistent = pendingMocks.filter((mock) => mock.isPersistent === true)
 	pendingMocks.length = 0
-	if (remaining.length > 0) {
-		const routes = remaining.map((mock) => `${mock.method} ${mock.url}`).join(', ')
+	pendingMocks.push(...persistent)
+	if (leftover.length > 0) {
+		const routes = leftover.map((mock) => `${mock.method} ${mock.url}`).join(', ')
 		throw new Error(`Unconsumed fetch mocks: ${routes}`)
 	}
 })
@@ -97,10 +118,32 @@ function mockObjectHead(oid: string, status: number, contentLength = 0): void {
 	})
 }
 
-async function post(path: string, body: unknown): Promise<Response> {
+async function signOidcToken(
+	claims: Record<string, unknown> = {},
+	options: { audience?: string; expiresAt?: number | string; issuer?: string } = {},
+): Promise<string> {
+	return new SignJWT({ repository: 'kitschpatrol/repo', repository_id: String(repoId), ...claims })
+		.setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
+		.setIssuer(options.issuer ?? githubActionsIssuer)
+		.setAudience(options.audience ?? 'example.com')
+		.setIssuedAt()
+		.setExpirationTime(options.expiresAt ?? '5m')
+		.sign(privateKey)
+}
+
+function oidcAuthHeader(token: string): Record<string, string> {
+	// eslint-disable-next-line no-restricted-globals
+	return { Authorization: `Basic ${btoa(`oidc:${token}`)}` }
+}
+
+async function post(
+	path: string,
+	body: unknown,
+	headers: Record<string, string> = authHeader,
+): Promise<Response> {
 	const request = new Request<unknown, IncomingRequestCfProperties>(`https://example.com${path}`, {
 		body: JSON.stringify(body),
-		headers: { Accept: mime, 'Content-Type': mime, ...authHeader },
+		headers: { Accept: mime, 'Content-Type': mime, ...headers },
 		method: 'POST',
 	})
 	const context = createExecutionContext()
@@ -112,8 +155,9 @@ async function post(path: string, body: unknown): Promise<Response> {
 async function postBatch(
 	operation: 'download' | 'upload',
 	objects: Array<{ oid: string; size: number }>,
+	headers?: Record<string, string>,
 ): Promise<Response> {
-	return post('/kitschpatrol/repo/objects/batch', { objects, operation })
+	return post('/kitschpatrol/repo/objects/batch', { objects, operation }, headers)
 }
 
 async function parseBatchResponse(response: Response): Promise<GitLfsBatchResponse> {
@@ -316,5 +360,63 @@ describe('verify endpoint', () => {
 		mockGitHubRepo({ pull: true, push: false })
 		const response = await post('/kitschpatrol/repo/objects/verify', { oid: oidA, size: 8 })
 		expect(response.status).toBe(403)
+	})
+})
+
+describe('github actions oidc authentication', () => {
+	it('allows downloads with a valid token and no GitHub API call', async () => {
+		// No GitHub API mock is registered: an unexpected call would throw
+		mockObjectHead(oidA, 200, 8)
+		const token = await signOidcToken()
+		const response = await postBatch('download', [{ oid: oidA, size: 8 }], oidcAuthHeader(token))
+		expect(response.status).toBe(200)
+		const body = await parseBatchResponse(response)
+		expect(getSuccessObject(body, oidA).actions?.download).toBeDefined()
+	})
+
+	it('rejects uploads', async () => {
+		const token = await signOidcToken()
+		const response = await postBatch('upload', [{ oid: oidA, size: 8 }], oidcAuthHeader(token))
+		expect(response.status).toBe(403)
+	})
+
+	it('rejects tokens issued for a different repository', async () => {
+		const token = await signOidcToken({ repository: 'kitschpatrol/other' })
+		const response = await postBatch('download', [{ oid: oidA, size: 8 }], oidcAuthHeader(token))
+		expect(response.status).toBe(403)
+	})
+
+	it('rejects tokens with the wrong audience', async () => {
+		const token = await signOidcToken({}, { audience: 'https://github.com/kitschpatrol' })
+		const response = await postBatch('download', [{ oid: oidA, size: 8 }], oidcAuthHeader(token))
+		expect(response.status).toBe(401)
+	})
+
+	it('rejects expired tokens', async () => {
+		const token = await signOidcToken({}, { expiresAt: Math.floor(Date.now() / 1000) - 3600 })
+		const response = await postBatch('download', [{ oid: oidA, size: 8 }], oidcAuthHeader(token))
+		expect(response.status).toBe(401)
+	})
+
+	it('rejects tokens from an unexpected issuer', async () => {
+		const token = await signOidcToken({}, { issuer: 'https://evil.example.com' })
+		const response = await postBatch('download', [{ oid: oidA, size: 8 }], oidcAuthHeader(token))
+		expect(response.status).toBe(401)
+	})
+
+	it('rejects tokens missing a repository_id claim', async () => {
+		const token = await signOidcToken({ repository_id: undefined })
+		const response = await postBatch('download', [{ oid: oidA, size: 8 }], oidcAuthHeader(token))
+		expect(response.status).toBe(403)
+	})
+
+	it('rejects malformed tokens that only look like JWTs', async () => {
+		const response = await postBatch(
+			'download',
+			[{ oid: oidA, size: 8 }],
+			oidcAuthHeader('eyJhbGciOiJSUzI1NiJ9.e30.bm90LWEtcmVhbC1zaWduYXR1cmU'),
+		)
+		expect(response.status).toBe(401)
+		expect(response.headers.get('LFS-Authenticate')).toBe('Basic realm="Git LFS"')
 	})
 })
