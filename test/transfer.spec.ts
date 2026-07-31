@@ -25,8 +25,15 @@ const bucketOrigin = 'https://test-bucket.example.r2.cloudflarestorage.com'
 const readKeyId = 'test-read-key'
 const readWriteKeyId = 'test-write-key'
 
-// eslint-disable-next-line no-restricted-globals
-const authHeader = { Authorization: `Basic ${btoa('user:test-token')}` }
+// Unique tokens per request by default so the worker's authorization cache
+// doesn't couple tests to each other; pass an explicit token to test caching
+let tokenCounter = 0
+
+function patAuthHeader(token?: string): Record<string, string> {
+	tokenCounter += 1
+	// eslint-disable-next-line no-restricted-globals
+	return { Authorization: `Basic ${btoa(`user:${token ?? `test-token-${tokenCounter}`}`)}` }
+}
 
 // Key pair for signing test OIDC tokens; the public half is served by the
 // mocked GitHub JWKS endpoint
@@ -139,7 +146,7 @@ function oidcAuthHeader(token: string): Record<string, string> {
 async function post(
 	path: string,
 	body: unknown,
-	headers: Record<string, string> = authHeader,
+	headers: Record<string, string> = patAuthHeader(),
 ): Promise<Response> {
 	const request = new Request<unknown, IncomingRequestCfProperties>(`https://example.com${path}`, {
 		body: JSON.stringify(body),
@@ -360,6 +367,36 @@ describe('verify endpoint', () => {
 		mockGitHubRepo({ pull: true, push: false })
 		const response = await post('/kitschpatrol/repo/objects/verify', { oid: oidA, size: 8 })
 		expect(response.status).toBe(403)
+	})
+})
+
+describe('authorization cache', () => {
+	it('reuses a cached authorization instead of calling GitHub again', async () => {
+		const headers = patAuthHeader('reused-token')
+		// A single GitHub response is mocked for two batches: a second API
+		// call would throw on the unmatched fetch
+		mockGitHubRepo({ pull: true, push: false })
+		mockObjectHead(oidA, 200, 8)
+		mockObjectHead(oidA, 200, 8)
+
+		const first = await postBatch('download', [{ oid: oidA, size: 8 }], headers)
+		expect(first.status).toBe(200)
+
+		const second = await postBatch('download', [{ oid: oidA, size: 8 }], headers)
+		expect(second.status).toBe(200)
+	})
+
+	it('applies cached permissions to later operations', async () => {
+		const headers = patAuthHeader('pull-only-token')
+		mockGitHubRepo({ pull: true, push: false })
+		mockObjectHead(oidA, 200, 8)
+
+		const download = await postBatch('download', [{ oid: oidA, size: 8 }], headers)
+		expect(download.status).toBe(200)
+
+		// The upload denial comes from the cached permissions, not GitHub
+		const upload = await postBatch('upload', [{ oid: oidA, size: 8 }], headers)
+		expect(upload.status).toBe(403)
 	})
 })
 

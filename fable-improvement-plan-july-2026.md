@@ -89,7 +89,7 @@ Nothing restricts which repos may use the worker. Anyone with a GitHub account c
 3. **Spec-compliance pass** (findings 4–5), including the `verify` action and lock 404s.
 4. **Real tests** — the current suite is two hello-world snapshots. The Workers vitest pool makes this testable: mock Octokit, use fake AWS credentials (signing is deterministic, no network), and cover the attack cases directly: traversal OIDs, non-allowlisted owners, the permission matrix, oversize objects, malformed auth headers, empty batches.
 5. ~~**OIDC auth path for CI**~~ Done 2026-07-31: JWTs verified against GitHub's JWKS with pinned issuer and audience, `repository` claim matched to the URL path, `repository_id` claim used as the storage namespace. Download-only.
-6. **Optional polish**: short-TTL in-memory cache of auth results keyed by SHA-256(token) + repoId (cuts the ~300 ms GitHub round-trip per batch; never store the token itself), a Cloudflare rate-limiting rule on the route, and a readme rewrite covering the CI recipe.
+6. ~~**Optional polish**~~ Done 2026-07-31: five-minute auth cache keyed by SHA-256(credential) + owner/repo, and the readme rewritten with the CI recipe. The Cloudflare rate-limiting rule remains a dashboard task (see the readme's hardening section).
 
 **Out of scope for now** (no demonstrated need): locking support, multipart uploads for objects over 5 GiB, public-repo support.
 

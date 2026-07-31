@@ -51,6 +51,59 @@ function getGitHubActionsJwks(): ReturnType<typeof createRemoteJWKSet> {
 // eslint-disable-next-line no-control-regex
 const controlCharacterRegex = /[\u{0}-\u{1F}\u{7F}]/v
 
+type CachedAuthorization = {
+	expiresAt: number
+	permissions: { pull: boolean; push: boolean }
+	repoId: number
+}
+
+// Short-lived per-isolate cache of GitHub authorization results, keyed by a
+// hash of the credential (the credential itself is never stored). Cuts the
+// GitHub API round-trip on repeated batches and per-object verify calls. The
+// tradeoff: a revoked token or changed permission can linger for up to the TTL.
+const authorizationCache = new Map<string, CachedAuthorization>()
+const authorizationCacheTtl = 5 * 60 * 1000
+const authorizationCacheMaxEntries = 1000
+
+async function getAuthorizationCacheKey(
+	credential: string,
+	owner: string,
+	repo: string,
+): Promise<string> {
+	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(credential))
+	const hash = Array.from(new Uint8Array(digest), (byte) =>
+		byte.toString(16).padStart(2, '0'),
+	).join('')
+	return `${hash}:${owner.toLowerCase()}/${repo.toLowerCase()}`
+}
+
+function getCachedAuthorization(key: string): CachedAuthorization | undefined {
+	const cached = authorizationCache.get(key)
+	if (cached === undefined) {
+		return undefined
+	}
+
+	if (cached.expiresAt <= Date.now()) {
+		authorizationCache.delete(key)
+		return undefined
+	}
+
+	return cached
+}
+
+function setCachedAuthorization(key: string, value: Omit<CachedAuthorization, 'expiresAt'>): void {
+	// Bound memory by dropping the oldest entry once full (Maps preserve
+	// insertion order)
+	if (authorizationCache.size >= authorizationCacheMaxEntries) {
+		const oldestKey = authorizationCache.keys().next().value
+		if (oldestKey !== undefined) {
+			authorizationCache.delete(oldestKey)
+		}
+	}
+
+	authorizationCache.set(key, { ...value, expiresAt: Date.now() + authorizationCacheTtl })
+}
+
 export default {
 	async fetch(request, env, _context): Promise<Response> {
 		const requestId = request.headers.get('cf-ray') ?? 'unknown'
@@ -313,6 +366,16 @@ async function authorizeRequest(
 		)
 	}
 
+	const cacheKey = await getAuthorizationCacheKey(credential, owner, repo)
+	const cached = getCachedAuthorization(cacheKey)
+	if (cached !== undefined) {
+		if (!hasOperationPermission(cached.permissions, operation)) {
+			return { errorResponse: operationForbiddenResponse(operation, owner, repo, requestId) }
+		}
+
+		return { repoId: cached.repoId }
+	}
+
 	const repoResult = await getGitHubRepoInfo(owner, repo, credential)
 	if (repoResult.type === 'unauthorized') {
 		return {
@@ -335,20 +398,39 @@ async function authorizeRequest(
 		}
 	}
 
-	const isAuthorized = checkAuthorization(repoResult.repoInfo, operation)
-	if (!isAuthorized) {
-		return {
-			errorResponse: lfsErrorResponse(
-				`Not authorized to ${operation} in repository "${owner}/${repo}". Check permissions on your GitHub personal access token.`,
-				requestId,
-				403,
-			),
-		}
+	const permissions = {
+		pull: repoResult.repoInfo.permissions?.pull ?? false,
+		push: repoResult.repoInfo.permissions?.push ?? false,
+	}
+	setCachedAuthorization(cacheKey, { permissions, repoId: repoResult.repoInfo.id })
+
+	if (!hasOperationPermission(permissions, operation)) {
+		return { errorResponse: operationForbiddenResponse(operation, owner, repo, requestId) }
 	}
 
 	// Used as directory prefix to prevent side-channel attacks
 	// while remaining robust to repo name changes
 	return { repoId: repoResult.repoInfo.id }
+}
+
+function operationForbiddenResponse(
+	operation: 'download' | 'upload',
+	owner: string,
+	repo: string,
+	requestId: string,
+): Response {
+	return lfsErrorResponse(
+		`Not authorized to ${operation} in repository "${owner}/${repo}". Check permissions on your GitHub personal access token.`,
+		requestId,
+		403,
+	)
+}
+
+function hasOperationPermission(
+	permissions: { pull: boolean; push: boolean },
+	operation: 'download' | 'upload',
+): boolean {
+	return operation === 'download' ? permissions.pull : permissions.push
 }
 
 async function authorizeGitHubActionsToken(
@@ -504,22 +586,6 @@ async function getGitHubRepoInfo(
 
 		return { type: 'not-found' }
 	}
-}
-
-function checkAuthorization(repoInfo: GitHubRepoInfo, operation: 'download' | 'upload'): boolean {
-	if (repoInfo.permissions === undefined) {
-		return false
-	}
-
-	if (operation === 'upload' && !repoInfo.permissions.push) {
-		return false
-	}
-
-	if (operation === 'download' && !repoInfo.permissions.pull) {
-		return false
-	}
-
-	return true
 }
 
 function createR2Clients(env: Env): { readOnlyClient: AwsClient; readWriteClient: AwsClient } {
