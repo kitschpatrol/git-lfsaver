@@ -1,0 +1,49 @@
+name: Checkout Without LFS
+
+on:
+  push: {}
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  lfs-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: List LFS files and verify pointers
+        run: |
+          set -euo pipefail
+
+          git lfs ls-files --long --size
+          echo
+
+          {
+            echo "| File | On-disk size (bytes) | Status |"
+            echo "| --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          fail=0
+          while read -r oid _marker path; do
+            if [[ ! -f "$path" ]]; then
+              echo "MISSING  $path"
+              echo "| \`$path\` | - | missing |" >> "$GITHUB_STEP_SUMMARY"
+              fail=1
+              continue
+            fi
+            size=$(stat -c%s "$path")
+            if git lfs pointer --check --file="$path" && grep -q "oid sha256:$oid" "$path"; then
+              echo "OK       $path ($size bytes) — valid pointer for $oid"
+              echo "| \`$path\` | $size | valid pointer |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "FAIL     $path ($size bytes) — not a valid LFS pointer for $oid"
+              echo "| \`$path\` | $size | NOT a valid pointer |" >> "$GITHUB_STEP_SUMMARY"
+              fail=1
+            fi
+          done < <(git lfs ls-files --long)
+
+          exit "$fail"

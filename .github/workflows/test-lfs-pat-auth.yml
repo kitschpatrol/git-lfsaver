@@ -1,0 +1,102 @@
+# On-demand check of the PAT auth path against the deployed LFS server: a
+# GitHub personal access token sent as the Basic auth password must be able
+# to request downloads and uploads for this repository. Uses the same
+# PERSONAL_ACCESS_TOKEN secret as this repo's other workflows.
+#
+# Asserts three things without transferring any objects:
+#   1. Requests without credentials are rejected (401)
+#   2. The PAT can request downloads (200, with an object-level 404 for an
+#      OID that isn't in the bucket)
+#   3. The PAT can request uploads (200, with an object-level 413 for an
+#      oversized object — authorization passes but no signed upload URL is
+#      ever issued, so none can leak into these public logs)
+
+name: Test LFS PAT auth
+
+on:
+  workflow_dispatch:
+    inputs:
+      lfs-host:
+        description: Hostname of the deployed LFS server
+        required: true
+        default: lfs.kitschpatrol.com
+
+permissions: {}
+
+env:
+  MIME: application/vnd.git-lfs+json
+  # Well-formed SHA-256 OID that no real content hashes to
+  MISSING_OID: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+  # Larger than the worker's MAX_FILE_SIZE, so upload requests are authorized
+  # but refused per-object before a URL is signed
+  OVERSIZED_BYTES: '9999999999999'
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test-pat-auth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      BATCH_URL: https://${{ inputs.lfs-host }}/${{ github.repository }}/objects/batch
+    steps:
+      - name: Reject unauthenticated requests
+        run: |
+          set -euo pipefail
+          status=$(curl -sS -o response.json -w '%{http_code}' \
+            -X POST "$BATCH_URL" \
+            -H "Accept: $MIME" -H "Content-Type: $MIME" \
+            -d "{\"operation\":\"download\",\"objects\":[{\"oid\":\"$MISSING_OID\",\"size\":123}]}")
+          cat response.json
+          if [ "$status" != "401" ]; then
+            echo "::error::Expected 401 without credentials, got $status"
+            exit 1
+          fi
+
+      - name: Request download with PAT
+        env:
+          PAT: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PAT" ]; then
+            echo "::error::The PERSONAL_ACCESS_TOKEN secret is not set on this repository."
+            exit 1
+          fi
+          status=$(curl -sS -o response.json -w '%{http_code}' \
+            -u "pat:$PAT" \
+            -X POST "$BATCH_URL" \
+            -H "Accept: $MIME" -H "Content-Type: $MIME" \
+            -d "{\"operation\":\"download\",\"objects\":[{\"oid\":\"$MISSING_OID\",\"size\":123}]}")
+          jq 'del(.objects[]?.actions)' response.json || cat response.json
+          if [ "$status" != "200" ]; then
+            echo "::error::Expected 200 for an authenticated download batch, got $status"
+            exit 1
+          fi
+          if ! jq -e '.objects[0].error.code == 404' response.json > /dev/null; then
+            echo "::error::Expected an object-level 404 for a nonexistent OID"
+            exit 1
+          fi
+
+      - name: Request upload with PAT
+        env:
+          PAT: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+        run: |
+          set -euo pipefail
+          status=$(curl -sS -o response.json -w '%{http_code}' \
+            -u "pat:$PAT" \
+            -X POST "$BATCH_URL" \
+            -H "Accept: $MIME" -H "Content-Type: $MIME" \
+            -d "{\"operation\":\"upload\",\"objects\":[{\"oid\":\"$MISSING_OID\",\"size\":$OVERSIZED_BYTES}]}")
+          jq 'del(.objects[]?.actions)' response.json || cat response.json
+          if [ "$status" != "200" ]; then
+            echo "::error::Expected 200 for an authenticated upload batch (403 means the PAT lacks push permission), got $status"
+            exit 1
+          fi
+          if ! jq -e '.objects[0].error.code == 413' response.json > /dev/null; then
+            echo "::error::Expected an object-level 413 for an oversized object"
+            exit 1
+          fi
+
+          echo "PAT auth works: download and upload both authorized." >> "$GITHUB_STEP_SUMMARY"
