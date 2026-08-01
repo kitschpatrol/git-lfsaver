@@ -127,19 +127,9 @@ export default {
 			})
 		}
 
-		if (
-			// eslint-disable-next-line ts/no-unnecessary-condition
-			env.ENFORCE_MIME &&
-			(!request.headers.get('Accept')?.startsWith(mime) ||
-				!request.headers.get('Content-Type')?.startsWith(mime))
-		) {
-			return lfsErrorResponse(
-				`Invalid request headers, expect "Accept: ${mime}" and "Content-Type: ${mime}", received "${request.headers.get(
-					'Accept',
-				)}" and "${request.headers.get('Content-Type')}"`,
-				requestId,
-				406,
-			)
+		const mimeResponse = getInvalidMimeResponse(request, env, requestId)
+		if (mimeResponse !== undefined) {
+			return mimeResponse
 		}
 
 		// Expect /<owner>/<repo>/objects/<batch|verify>
@@ -210,6 +200,29 @@ function getStaticResponse(request: Request, url: URL, requestId: string): Respo
 			},
 			status: 200,
 		})
+	}
+
+	return undefined
+}
+
+function getInvalidMimeResponse(
+	request: Request,
+	env: Env,
+	requestId: string,
+): Response | undefined {
+	if (
+		// eslint-disable-next-line ts/no-unnecessary-condition
+		env.ENFORCE_MIME &&
+		(!request.headers.get('Accept')?.startsWith(mime) ||
+			!request.headers.get('Content-Type')?.startsWith(mime))
+	) {
+		return lfsErrorResponse(
+			`Invalid request headers, expect "Accept: ${mime}" and "Content-Type: ${mime}", received "${request.headers.get(
+				'Accept',
+			)}" and "${request.headers.get('Content-Type')}"`,
+			requestId,
+			406,
+		)
 	}
 
 	return undefined

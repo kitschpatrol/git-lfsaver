@@ -20,29 +20,10 @@
 			"custom_domain": true,
 		},
 	],
-	/**
-	 * Bindings
-	 * Bindings allow your Worker to interact with resources on the Cloudflare Developer Platform, including
-	 * databases, object storage, AI inference, real-time communication and more.
-	 * https://developers.cloudflare.com/workers/runtime-apis/bindings/
-	 */
-
-	/**
-	 * Smart Placement
-	 * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
-	 */
-	// "placement": { "mode": "smart" },
-
-	/**
-	 * Environment Variables
-	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
-	 */
-
 	"tsconfig": "tsconfig.build.json",
 	/**
-	 * Non-secret config only. Values here keep their JSON types at runtime.
+	 * Values here keep their JSON types at runtime.
 	 * R2 credentials are uploaded as string secrets from .env (see .template.env)
-	 * and typed in src/secrets.d.ts.
 	 */
 	"vars": {
 		/* Comma-separated GitHub owners (users or orgs) whose repos may use this
@@ -57,21 +38,4 @@
 		 */
 		"MAX_FILE_SIZE": 4995000000,
 	},
-
-	/**
-	 * Note: Use secrets to store sensitive data.
-	 * https://developers.cloudflare.com/workers/configuration/secrets/
-	 */
-
-	/**
-	 * Static Assets
-	 * https://developers.cloudflare.com/workers/static-assets/binding/
-	 */
-	// "assets": { "directory": "./public/", "binding": "ASSETS" },
-
-	/**
-	 * Service Bindings (communicate between multiple Workers)
-	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
-	 */
-	// "services": [{ "binding": "MY_SERVICE", "service": "my-service" }]
 }

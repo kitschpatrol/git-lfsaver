@@ -23,12 +23,14 @@ A Cloudflare Worker implements the [Git LFS batch API](https://github.com/git-lf
 
 Two credential types are accepted:
 
-- **GitHub personal access tokens**, for people. Download and upload permission mirror your pull and push permission on the GitHub repository named in the URL.
+- **GitHub tokens**, for people — a personal access token or the GitHub CLI's OAuth token. Download and upload permission mirror your pull and push permission on the GitHub repository named in the URL.
 - **GitHub Actions OIDC tokens**, for CI. Cryptographically verified against GitHub's keys with no stored secrets. Download only.
 
 Only repositories belonging to owners listed in the `ALLOWED_OWNERS` variable are served — without this, anyone with a GitHub account could store data in your bucket.
 
 Uploads are constrained to the byte size the client declares (the size is signed into the URL), deduplicated against existing objects, and confirmed post-upload via the LFS `verify` action.
+
+Storage speaks plain SigV4, so any S3-compatible provider that supports presigned URLs and virtual-hosted-style addressing (`https://<bucket>.<endpoint>/…`) should work by pointing `R2_S3_ENDPOINT` at it — though only R2 is tested. Providers that require path-style addressing or an explicit signing region would need small changes.
 
 ### Why not GitHub LFS?
 
@@ -80,15 +82,7 @@ GitHub [bills LFS by the metered GiB](https://docs.github.com/billing/managing-b
 
 ### Git repo setup
 
-1. Generate a GitHub personal access token with access to the repository you want to use LFS with.
-
-2. Configure Git to use a credential helper so you don't re-enter credentials on every transfer. On macOS:
-
-   ```sh
-   git config --global credential.helper osxkeychain
-   ```
-
-3. Install the client with `git lfs install` if you haven't already, then create a `.lfsconfig` file in the root of your repo:
+1. Install the client with `git lfs install` if you haven't already, then create a `.lfsconfig` file in the root of your repo:
 
    ```ini
    [lfs]
@@ -97,7 +91,30 @@ GitHub [bills LFS by the metered GiB](https://docs.github.com/billing/managing-b
 
    No `locksverify` setting is needed — the server signals that locking is unsupported and clients disable it automatically.
 
-4. Track some files and push:
+2. Give Git a GitHub credential for the LFS host. The worker accepts any token GitHub can validate.
+
+   **With the [GitHub CLI](https://cli.github.com/)** (recommended): forward your existing `gh` login — nothing new to create, store, or rotate:
+
+   ```sh
+   git config credential.https://lfs.example.com.helper \
+     '!f() { echo username=gh; echo password=$(gh auth token); };f'
+   ```
+
+   Nothing is stored for the LFS host itself: Git runs this helper each time the server asks for credentials (typically once per pull or push), fetching the token from `gh` on demand. The token lives wherever `gh` already keeps your login — the system keychain on macOS — so rotating or revoking it through `gh auth` takes effect immediately.
+
+   This writes to the repo's own `.git/config`; add `--global` to configure it once per machine instead — the key is scoped to the LFS URL, so it applies to every clone that uses this server and nothing else. It can't go in the committed `.lfsconfig`: Git's credential machinery doesn't read that file, deliberately, since a committed shell helper would let any cloned repo execute code.
+
+   **Without it**: generate a personal access token with access to the repository, and configure a credential helper so you only enter it once. On macOS:
+
+   ```sh
+   git config --global credential.helper osxkeychain
+   ```
+
+   Enter your GitHub username and the token when prompted on first transfer.
+
+   Token caveats: a classic token needs the `repo` scope to see private repositories at all — without it the server responds 404, not 403. Fine-grained tokens grant more than they appear to: GitHub reports your _role_ on the repository rather than the token's restricted permissions, so any fine-grained token that can read a repo's metadata carries your full LFS access — scoping a token to read-only does not make LFS read-only.
+
+3. Track some files and push:
 
    ```sh
    git lfs track "*.bin"
@@ -106,9 +123,7 @@ GitHub [bills LFS by the metered GiB](https://docs.github.com/billing/managing-b
    git push
    ```
 
-   When prompted, enter your GitHub username and the personal access token.
-
-5. Verify that large files are being tracked:
+4. Verify that large files are being tracked:
 
    ```sh
    git lfs ls-files
@@ -138,11 +153,11 @@ steps:
   - run: git lfs pull
 ```
 
-The requested `audience` must equal the LFS server's hostname, and the token's `repository` claim must match the repo in the `.lfsconfig` URL. OIDC tokens can only download — uploads always require a personal access token.
+The requested `audience` must equal the LFS server's hostname, and the token's `repository` claim must match the repo in the `.lfsconfig` URL. OIDC tokens can only download — uploads always require a GitHub token as described above.
 
 ### Optional hardening
 
-- Add a [Cloudflare rate-limiting rule](https://developers.cloudflare.com/waf/rate-limiting-rules/) on the LFS hostname to blunt credential stuffing and abuse. The worker caches authorization results for five minutes per credential, so normal use is light on the GitHub API.
+- Add a [Cloudflare rate-limiting rule](https://developers.cloudflare.com/waf/rate-limiting-rules/) on the LFS hostname to blunt credential stuffing and abuse — it blocks at the edge, before the worker runs. In the dashboard, open your zone, then **Security → WAF → Rate limiting rules → Create rule**, match the LFS host with the expression `http.host eq "lfs.example.com"`, and count per IP. A starting point: block above 300 requests per 10 seconds — only the small batch and verify POSTs hit this hostname (object transfers go directly to R2), but a push of many small files fires one verify per object, so don't set the threshold too low. Use the Block action rather than a challenge, which git-lfs can't solve. The worker caches authorization results for five minutes per credential, so normal use is light on the GitHub API.
 
 ## Limits
 
