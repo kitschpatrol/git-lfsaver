@@ -21,3 +21,5 @@ node_modules/
 vendor/
 
 # Customizations
+# Private half of the self-issued token signing key (`pnpm run token generate-key`)
+token-signing-key.json

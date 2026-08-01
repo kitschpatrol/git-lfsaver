@@ -16,6 +16,8 @@ export default defineConfig({
 					R2_S3_READ_SECRET_KEY: 'test-read-secret',
 					R2_S3_READ_WRITE_KEY_ID: 'test-write-key',
 					R2_S3_READ_WRITE_SECRET_KEY: 'test-write-secret',
+					// Public half of the test-only signing key in transfer.spec.ts
+					SELF_ISSUED_TOKEN_PUBLIC_KEY: 'md403Y-XQZSe0jQscBC8anBx-IQlxvKmSjvV3LbAad0',
 				},
 			},
 			wrangler: { configPath: './wrangler.jsonc' },

@@ -19,14 +19,25 @@
 
 ## Overview
 
-A Cloudflare Worker implements the [Git LFS batch API](https://github.com/git-lfs/git-lfs/blob/main/docs/api/batch.md): it authenticates the client against GitHub, then hands out short-lived presigned R2 URLs for the actual transfers. Object data never flows through the worker, and there is no separate user database — access mirrors GitHub's.
+This project implements the [Git LFS batch API](https://github.com/git-lfs/git-lfs/blob/main/docs/api/batch.md) as a Cloudflare Worker backed by R2 (or any S3-compatible) storage.
 
-Two credential types are accepted:
+It's designed primarily for use with projects hosted on GitHub, and is designed to transparently adopt GitHub's authentication and repository access policies as its own.
+
+The idea is to create something that basically _feels like_ using GitHub's built-in LFS support, without the cost and opacity that comes with it. Since access control is delegated to GitHub,
+
+
+
+
+
+
+
+Three credential types are accepted:
 
 - **GitHub tokens**, for people — a personal access token or the GitHub CLI's OAuth token. Download and upload permission mirror your pull and push permission on the GitHub repository named in the URL.
 - **GitHub Actions OIDC tokens**, for CI. Cryptographically verified against GitHub's keys with no stored secrets. Download only.
+- **Self-issued tokens**, for repositories that aren't on GitHub, addressed by a bare repo name instead of `<owner>/<repo>`. Signed Ed25519 JWTs you mint yourself with `pnpm run token mint`; the worker verifies them against a public key you configure, with no external calls. See [Repos not on GitHub](#repos-not-on-github-self-issued-tokens).
 
-Only repositories belonging to owners listed in the `ALLOWED_OWNERS` variable are served — without this, anyone with a GitHub account could store data in your bucket.
+GitHub-addressed repositories are only served when their owner is listed in the `ALLOWED_OWNERS` variable — without this, anyone with a GitHub account could store data in your bucket. Self-issued repositories don't consult the allowlist; the admin-signed token is the authorization.
 
 Uploads are constrained to the byte size the client declares and to the object's SHA-256 — both are signed into the presigned URL, so on providers that validate `x-amz-content-sha256` (such as R2) only the correct bytes can land at an object's address. Uploads are also deduplicated against existing objects and confirmed post-upload via the LFS `verify` action.
 
@@ -154,6 +165,61 @@ steps:
 ```
 
 The requested `audience` must equal the LFS server's hostname, and the token's `repository` claim must match the repo in the `.lfsconfig` URL. OIDC tokens can only download — uploads always require a GitHub token as described above.
+
+### Repos not on GitHub (self-issued tokens)
+
+If a repository isn't hosted on GitHub — a bare repo on your own server, a mirror, a local-only project — there's no forge API to delegate authorization to. Instead, whoever operates the LFS server mints signed tokens and hands them out. The worker verifies them against a public key with no external calls and no user database; the private key never leaves the operator's machine.
+
+The `pnpm run token` commands below run in your clone of this repository (the same one you deploy the worker from), not in the repo that uses LFS.
+
+Self-issued repos are addressed by a bare single-segment name — `https://lfs.example.com/<repo-name>` — with no owner. The path shape is what selects the credential type: owner-qualified `/<owner>/<repo>` URLs accept only GitHub credentials, single-segment URLs accept only self-issued tokens. Because the token itself is the authorization, `ALLOWED_OWNERS` plays no part here, and a repo name can never collide with a GitHub owner.
+
+**One-time server setup:**
+
+1. Generate a signing key pair:
+
+   ```sh
+   pnpm run token generate-key
+   ```
+
+   The private key is written to `token-signing-key.json` (gitignored). Copy the printed public key into `SELF_ISSUED_TOKEN_PUBLIC_KEY` in `wrangler.jsonc` and redeploy with `pnpm run deploy`. Leaving the variable empty keeps self-issued tokens disabled.
+
+**Per person (or machine), by the operator:**
+
+2. Mint a token — no redeploy needed, the deployed worker accepts it immediately:
+
+   ```sh
+   pnpm run token mint --repo example-repo --host lfs.example.com --pull --push --expiry 90d --subject alice
+   ```
+
+   The `--host` value becomes the token's audience and must match the LFS server's hostname exactly. Grant `--pull`, `--push`, or both; `--subject` is an optional label recorded in the token. Send the printed token to its holder over a reasonable channel — it's a bearer credential.
+
+**In the repo that uses LFS, by the token holder:**
+
+3. Point the repo's `.lfsconfig` at the server, using the single-segment URL whose name matches the token's `--repo` value:
+
+   ```ini
+   [lfs]
+   url = https://lfs.example.com/example-repo
+   ```
+
+4. Give Git the token as the Basic auth password for the LFS host, exactly like a personal access token — for example with the keychain helper (`git config --global credential.helper osxkeychain`), entering any username and the token when prompted.
+
+**Sharing a GitHub-backed repo with someone who has no GitHub account:**
+
+Normally a GitHub-hosted repo's LFS objects require GitHub credentials. To hand access to someone outside GitHub entirely, mint an explicit grant by adding `--github-repo-id` with the repo's numeric ID (from `gh api repos/<owner>/<name> --jq .id`) and the owner-qualified `--repo` path:
+
+```sh
+pnpm run token mint --repo example-owner/example-repo --github-repo-id 12345678 --host lfs.example.com --pull --expiry 30d --subject contractor
+```
+
+The holder uses the repo's normal `.lfsconfig` (the same owner-qualified URL as everyone else) with the token as their password. Understand what this trades away: the grant bypasses GitHub's permission model, so removing someone from the GitHub repo does **not** revoke their token — only expiry or key rotation does. Keep these expiries short.
+
+Caveats worth knowing:
+
+- **Revocation is by expiry or key rotation.** There's no per-token revocation list — keep expiries short-ish, and rerun `generate-key` (after moving the old key file aside) to invalidate every outstanding token at once.
+- **Renames move storage.** Objects are stored under a prefix derived from the repo name (`self/<repo-name>`), so renaming a repo orphans its objects until they're re-uploaded or copied to the new prefix in the bucket. GitHub-backed repos don't have this caveat because they're keyed by GitHub's immutable repo ID.
+- **The public key is not a secret**, but `token-signing-key.json` is — anyone holding it can mint tokens for any self-issued repo, and explicit grants into any GitHub-backed repo's storage. Guard it accordingly.
 
 ### Optional hardening
 

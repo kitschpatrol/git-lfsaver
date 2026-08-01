@@ -34,7 +34,8 @@
 		"fix": "ksc fix --skip repo",
 		"init": "op inject -i .template.env -o .env",
 		"lint": "ksc lint --skip repo",
-		"test": "vitest run"
+		"test": "vitest run",
+		"token": "node scripts/token.ts"
 	},
 	"dependencies": {
 		"@octokit/rest": "^22.0.1",

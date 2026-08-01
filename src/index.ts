@@ -4,7 +4,7 @@ import type { RestEndpointMethodTypes } from '@octokit/rest'
 import type { JWTPayload } from 'jose'
 import { Octokit } from '@octokit/rest'
 import { AwsClient } from 'aws4fetch'
-import { createRemoteJWKSet, jwtVerify } from 'jose'
+import { createRemoteJWKSet, decodeJwt, importJWK, jwtVerify } from 'jose'
 import { z } from 'zod'
 import type {
 	GitLfsBatchResponse,
@@ -16,19 +16,28 @@ import {
 	gitLfsBatchResponseSchema,
 	gitLfsVerifyRequestSchema,
 } from './schemas'
+import {
+	selfIssuedGitHubGrantClaimsSchema,
+	selfIssuedTokenClaimsSchema,
+	selfIssuedTokenIssuer,
+} from './self-issued'
 
 type GitHubRepoInfo = RestEndpointMethodTypes['repos']['get']['response']['data']
 
 type GitHubRepoResult =
 	{ repoInfo: GitHubRepoInfo; type: 'found' } | { type: 'not-found' } | { type: 'unauthorized' }
 
-type AuthorizationResult = { errorResponse: Response } | { repoId: number }
+type AuthorizationResult = { errorResponse: Response } | { storagePrefix: string }
+
+// GitHub repos are addressed as /<owner>/<repo>/…, self-issued (non-GitHub)
+// repos as /<repo-name>/… — the path shape selects the credential type
+type RepoAddress = { name: string; type: 'self' } | { owner: string; repo: string; type: 'github' }
 
 type ObjectContext = {
 	env: Env
 	readOnlyClient: AwsClient
 	readWriteClient: AwsClient
-	repoId: number
+	storagePrefix: string
 	verifyUrl: string
 }
 
@@ -48,13 +57,28 @@ function getGitHubActionsJwks(): ReturnType<typeof createRemoteJWKSet> {
 	return githubActionsJwks
 }
 
+let selfIssuedKeyCache: undefined | { key: CryptoKey | Uint8Array; publicKey: string }
+
+async function getSelfIssuedPublicKey(publicKey: string): Promise<CryptoKey | Uint8Array> {
+	// Cached at module level like the JWKS; keyed by the binding value so a
+	// rotated key takes effect without an isolate restart
+	if (selfIssuedKeyCache?.publicKey !== publicKey) {
+		selfIssuedKeyCache = {
+			key: await importJWK({ crv: 'Ed25519', kty: 'OKP', x: publicKey }, 'EdDSA'),
+			publicKey,
+		}
+	}
+
+	return selfIssuedKeyCache.key
+}
+
 // eslint-disable-next-line no-control-regex
 const controlCharacterRegex = /[\u{0}-\u{1F}\u{7F}]/v
 
 type CachedAuthorization = {
 	expiresAt: number
 	permissions: { pull: boolean; push: boolean }
-	repoId: number
+	storagePrefix: string
 }
 
 // Short-lived per-isolate cache of GitHub authorization results, keyed by a
@@ -132,34 +156,53 @@ export default {
 			return mimeResponse
 		}
 
-		// Expect /<owner>/<repo>/objects/<batch|verify>
+		// Expect /<owner>/<repo>/objects/<batch|verify> for GitHub repos, or
+		// /<repo-name>/objects/<batch|verify> for self-issued (non-GitHub) repos
 		const pathParts = url.pathname.split('/')
 		const isBatch = url.pathname.endsWith('/objects/batch')
 		const isVerify = url.pathname.endsWith('/objects/verify')
-		if ((isBatch || isVerify) && pathParts.length === 5) {
-			const owner = decodeURIComponent(pathParts[1] ?? '')
-			const repo = decodeURIComponent(pathParts[2] ?? '')
-			if (owner.length === 0 || repo.length === 0) {
-				return lfsErrorResponse(
-					`Invalid request URL pathname, expect "/<owner>/<repo>/objects/batch", received "${url.pathname}" Double check your lfs.url value in your .lfsconfig file.`,
-					requestId,
-					422,
-				)
-			}
+		if ((isBatch || isVerify) && (pathParts.length === 4 || pathParts.length === 5)) {
+			let address: RepoAddress
+			if (pathParts.length === 5) {
+				const owner = decodeURIComponent(pathParts[1] ?? '')
+				const repo = decodeURIComponent(pathParts[2] ?? '')
+				if (owner.length === 0 || repo.length === 0) {
+					return lfsErrorResponse(
+						`Invalid request URL pathname, expect "/<owner>/<repo>/objects/batch", received "${url.pathname}" Double check your lfs.url value in your .lfsconfig file.`,
+						requestId,
+						422,
+					)
+				}
 
-			// Reject repos outside the allowlist before doing any real work,
-			// otherwise anyone with a GitHub account can store objects in the bucket
-			if (!isOwnerAllowed(owner, env.ALLOWED_OWNERS)) {
-				return lfsErrorResponse(
-					`Repository owner "${owner}" is not allowed to use this LFS server.`,
-					requestId,
-					403,
-				)
+				// Reject repos outside the allowlist before doing any real work,
+				// otherwise anyone with a GitHub account can store objects in the
+				// bucket. Self-issued (single-segment) paths skip this: their
+				// authorization is the admin-signed token itself.
+				if (!isOwnerAllowed(owner, env.ALLOWED_OWNERS)) {
+					return lfsErrorResponse(
+						`Repository owner "${owner}" is not allowed to use this LFS server.`,
+						requestId,
+						403,
+					)
+				}
+
+				address = { owner, repo, type: 'github' }
+			} else {
+				const name = decodeURIComponent(pathParts[1] ?? '')
+				if (name.length === 0) {
+					return lfsErrorResponse(
+						`Invalid request URL pathname, expect "/<repo-name>/objects/batch", received "${url.pathname}" Double check your lfs.url value in your .lfsconfig file.`,
+						requestId,
+						422,
+					)
+				}
+
+				address = { name, type: 'self' }
 			}
 
 			return isBatch
-				? handleBatch(request, env, owner, repo, requestId)
-				: handleVerify(request, env, owner, repo, requestId)
+				? handleBatch(request, env, address, requestId)
+				: handleVerify(request, env, address, requestId)
 		}
 
 		return lfsErrorResponse('Not found.', requestId, 404)
@@ -231,8 +274,7 @@ function getInvalidMimeResponse(
 async function handleBatch(
 	request: Request,
 	env: Env,
-	owner: string,
-	repo: string,
+	address: RepoAddress,
 	requestId: string,
 ): Promise<Response> {
 	// Read and validate the request
@@ -250,7 +292,7 @@ async function handleBatch(
 
 	const { hash_algo, objects, operation } = result.data
 
-	const authorization = await authorizeRequest(request, owner, repo, operation, requestId)
+	const authorization = await authorizeRequest(request, env, address, operation, requestId)
 	if ('errorResponse' in authorization) {
 		return authorization.errorResponse
 	}
@@ -258,11 +300,8 @@ async function handleBatch(
 	const context: ObjectContext = {
 		env,
 		...createR2Clients(env),
-		repoId: authorization.repoId,
-		verifyUrl: new URL(
-			`/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/objects/verify`,
-			request.url,
-		).href,
+		storagePrefix: authorization.storagePrefix,
+		verifyUrl: new URL(`${getRepoUrlPath(address)}/objects/verify`, request.url).href,
 	}
 
 	const response: GitLfsBatchResponse = {
@@ -294,8 +333,7 @@ async function handleBatch(
 async function handleVerify(
 	request: Request,
 	env: Env,
-	owner: string,
-	repo: string,
+	address: RepoAddress,
 	requestId: string,
 ): Promise<Response> {
 	// Read and validate the request
@@ -312,16 +350,17 @@ async function handleVerify(
 	}
 
 	// Verification happens right after upload, so require the same permission
-	const authorization = await authorizeRequest(request, owner, repo, 'upload', requestId)
+	const authorization = await authorizeRequest(request, env, address, 'upload', requestId)
 	if ('errorResponse' in authorization) {
 		return authorization.errorResponse
 	}
 
 	const { oid, size } = result.data
 	const { readOnlyClient } = createR2Clients(env)
-	const headResponse = await readOnlyClient.fetch(getObjectUrl(env, authorization.repoId, oid), {
-		method: 'HEAD',
-	})
+	const headResponse = await readOnlyClient.fetch(
+		getObjectUrl(env, authorization.storagePrefix, oid),
+		{ method: 'HEAD' },
+	)
 
 	if (headResponse.status !== 200) {
 		return lfsErrorResponse(
@@ -351,8 +390,8 @@ async function handleVerify(
 
 async function authorizeRequest(
 	request: Request,
-	owner: string,
-	repo: string,
+	env: Env,
+	address: RepoAddress,
 	operation: 'download' | 'upload',
 	requestId: string,
 ): Promise<AuthorizationResult> {
@@ -360,7 +399,7 @@ async function authorizeRequest(
 	if (credential === undefined) {
 		return {
 			errorResponse: lfsErrorResponse(
-				'No GitHub credential provided. Send a personal access token or a GitHub Actions OIDC token as the Basic auth password.',
+				'No credential provided. Send a GitHub personal access token, a GitHub Actions OIDC token, or a self-issued token as the Basic auth password.',
 				requestId,
 				401,
 				unauthorizedHeaders,
@@ -368,15 +407,36 @@ async function authorizeRequest(
 		}
 	}
 
+	const audience = new URL(request.url).host
+	// The issuer claim only routes the token to a verifier; nothing is trusted
+	// until the signature check inside that verifier passes
+	const isSelfIssuedToken =
+		isJsonWebToken(credential) && getUnverifiedIssuer(credential) === selfIssuedTokenIssuer
+
+	if (address.type === 'self') {
+		if (!isSelfIssuedToken) {
+			return {
+				errorResponse: lfsErrorResponse(
+					`Repository "${address.name}" is addressed without an owner segment, so it accepts only self-issued tokens. GitHub repositories use "/<owner>/<repo>" URLs instead.`,
+					requestId,
+					401,
+					unauthorizedHeaders,
+				),
+			}
+		}
+
+		return authorizeSelfIssuedToken(credential, audience, env, address, operation, requestId)
+	}
+
+	const { owner, repo } = address
+	if (isSelfIssuedToken) {
+		// Owner-qualified paths accept self-issued tokens only when they carry
+		// an explicit GitHub repo grant (minted with --github-repo-id)
+		return authorizeSelfIssuedToken(credential, audience, env, address, operation, requestId)
+	}
+
 	if (isJsonWebToken(credential)) {
-		return authorizeGitHubActionsToken(
-			credential,
-			new URL(request.url).host,
-			owner,
-			repo,
-			operation,
-			requestId,
-		)
+		return authorizeGitHubActionsToken(credential, audience, owner, repo, operation, requestId)
 	}
 
 	const cacheKey = await getAuthorizationCacheKey(credential, owner, repo)
@@ -386,7 +446,7 @@ async function authorizeRequest(
 			return { errorResponse: operationForbiddenResponse(operation, owner, repo, requestId) }
 		}
 
-		return { repoId: cached.repoId }
+		return { storagePrefix: cached.storagePrefix }
 	}
 
 	const repoResult = await getGitHubRepoInfo(owner, repo, credential)
@@ -415,15 +475,17 @@ async function authorizeRequest(
 		pull: repoResult.repoInfo.permissions?.pull ?? false,
 		push: repoResult.repoInfo.permissions?.push ?? false,
 	}
-	setCachedAuthorization(cacheKey, { permissions, repoId: repoResult.repoInfo.id })
+
+	// The numeric GitHub repo ID is used as the storage prefix to prevent
+	// side-channel attacks while remaining robust to repo name changes
+	const storagePrefix = String(repoResult.repoInfo.id)
+	setCachedAuthorization(cacheKey, { permissions, storagePrefix })
 
 	if (!hasOperationPermission(permissions, operation)) {
 		return { errorResponse: operationForbiddenResponse(operation, owner, repo, requestId) }
 	}
 
-	// Used as directory prefix to prevent side-channel attacks
-	// while remaining robust to repo name changes
-	return { repoId: repoResult.repoInfo.id }
+	return { storagePrefix }
 }
 
 function operationForbiddenResponse(
@@ -499,8 +561,8 @@ async function authorizeGitHubActionsToken(
 		}
 	}
 
-	// The same numeric repo ID the GitHub API reports, so both auth paths
-	// address the same storage namespace
+	// The same numeric repo ID the GitHub API reports, so both GitHub auth
+	// paths address the same storage namespace
 	const repoId = Number(payload.repository_id)
 	if (!Number.isInteger(repoId) || repoId <= 0) {
 		return {
@@ -512,7 +574,148 @@ async function authorizeGitHubActionsToken(
 		}
 	}
 
-	return { repoId }
+	return { storagePrefix: String(repoId) }
+}
+
+async function authorizeSelfIssuedToken(
+	token: string,
+	audience: string,
+	env: Env,
+	address: RepoAddress,
+	operation: 'download' | 'upload',
+	requestId: string,
+): Promise<AuthorizationResult> {
+	const publicKey = env.SELF_ISSUED_TOKEN_PUBLIC_KEY
+	// eslint-disable-next-line ts/no-unnecessary-condition -- The generated type narrows to the deployment's literal value
+	if (publicKey === '') {
+		return {
+			errorResponse: lfsErrorResponse(
+				'This server does not accept self-issued tokens. Set the SELF_ISSUED_TOKEN_PUBLIC_KEY variable to enable them.',
+				requestId,
+				401,
+				unauthorizedHeaders,
+			),
+		}
+	}
+
+	let key: Awaited<ReturnType<typeof getSelfIssuedPublicKey>>
+	try {
+		key = await getSelfIssuedPublicKey(publicKey)
+	} catch {
+		return {
+			errorResponse: lfsErrorResponse(
+				'SELF_ISSUED_TOKEN_PUBLIC_KEY is not a valid Ed25519 public key. Expect the base64url value printed by `pnpm run token generate-key`.',
+				requestId,
+				500,
+			),
+		}
+	}
+
+	let payload: JWTPayload
+	try {
+		const result = await jwtVerify(token, key, {
+			algorithms: ['EdDSA'],
+			audience,
+			issuer: selfIssuedTokenIssuer,
+			requiredClaims: ['exp'],
+		})
+		payload = result.payload
+	} catch {
+		return {
+			errorResponse: lfsErrorResponse(
+				`Self-issued token verification failed. Mint the token for host "${audience}" with \`pnpm run token mint\`.`,
+				requestId,
+				401,
+				unauthorizedHeaders,
+			),
+		}
+	}
+
+	if (address.type === 'github') {
+		// Owner-qualified paths require an explicit GitHub repo grant: the
+		// admin-asserted numeric ID pins the token to the same storage prefix
+		// the GitHub credential paths resolve, bypassing GitHub's permission
+		// model for collaborators without GitHub accounts
+		const grantResult = selfIssuedGitHubGrantClaimsSchema.safeParse(payload)
+		if (!grantResult.success) {
+			return {
+				errorResponse: lfsErrorResponse(
+					`This self-issued token does not grant access to GitHub repository "${address.owner}/${address.repo}". Mint one with \`pnpm run token mint --github-repo-id\`.`,
+					requestId,
+					403,
+				),
+			}
+		}
+
+		const grant = grantResult.data
+		if (grant.repo.toLowerCase() !== `${address.owner}/${address.repo}`.toLowerCase()) {
+			return {
+				errorResponse: lfsErrorResponse(
+					`Self-issued token was not issued for repository "${address.owner}/${address.repo}".`,
+					requestId,
+					403,
+				),
+			}
+		}
+
+		if (!hasOperationPermission(grant, operation)) {
+			return {
+				errorResponse: lfsErrorResponse(
+					`This self-issued token is not authorized to ${operation} in repository "${address.owner}/${address.repo}".`,
+					requestId,
+					403,
+				),
+			}
+		}
+
+		return { storagePrefix: String(grant.github_repo_id) }
+	}
+
+	const claimsResult = selfIssuedTokenClaimsSchema.safeParse(payload)
+	if (!claimsResult.success) {
+		return {
+			errorResponse: lfsErrorResponse(
+				`Self-issued token has invalid claims:\n${z.prettifyError(claimsResult.error)}`,
+				requestId,
+				403,
+			),
+		}
+	}
+
+	const claims = claimsResult.data
+	if (claims.repo.toLowerCase() !== address.name.toLowerCase()) {
+		return {
+			errorResponse: lfsErrorResponse(
+				`Self-issued token was not issued for repository "${address.name}".`,
+				requestId,
+				403,
+			),
+		}
+	}
+
+	if (!hasOperationPermission(claims, operation)) {
+		return {
+			errorResponse: lfsErrorResponse(
+				`This self-issued token is not authorized to ${operation} in repository "${address.name}".`,
+				requestId,
+				403,
+			),
+		}
+	}
+
+	// Namespaced under "self/" so admin-chosen repo names can never collide
+	// with the purely numeric GitHub prefixes (a repo named "12345" must not
+	// alias GitHub repo ID 12345). Renaming a repo moves its prefix, so
+	// objects must be copied or re-uploaded after a rename.
+	return { storagePrefix: `self/${claims.repo.toLowerCase()}` }
+}
+
+function getUnverifiedIssuer(token: string): string | undefined {
+	try {
+		return decodeJwt(token).iss
+	} catch {
+		return undefined
+	}
 }
 
 function isJsonWebToken(credential: string): boolean {
@@ -614,8 +817,14 @@ function createR2Clients(env: Env): { readOnlyClient: AwsClient; readWriteClient
 	}
 }
 
-function getObjectUrl(env: Env, repoId: number, oid: string): string {
-	return `https://${env.R2_S3_BUCKET}.${env.R2_S3_ENDPOINT}/${repoId}/${oid}`
+function getRepoUrlPath(address: RepoAddress): string {
+	return address.type === 'github'
+		? `/${encodeURIComponent(address.owner)}/${encodeURIComponent(address.repo)}`
+		: `/${encodeURIComponent(address.name)}`
+}
+
+function getObjectUrl(env: Env, storagePrefix: string, oid: string): string {
+	return `https://${env.R2_S3_BUCKET}.${env.R2_S3_ENDPOINT}/${storagePrefix}/${oid}`
 }
 
 async function sign(
@@ -656,7 +865,7 @@ async function processObject(
 	operation: 'download' | 'upload',
 	context: ObjectContext,
 ): Promise<GitLfsBatchResponseErrorObject | GitLfsBatchResponseObject> {
-	const { env, readOnlyClient, readWriteClient, repoId, verifyUrl } = context
+	const { env, readOnlyClient, readWriteClient, storagePrefix, verifyUrl } = context
 
 	// Check for max size...
 	if (size > env.MAX_FILE_SIZE) {
@@ -671,7 +880,7 @@ async function processObject(
 	}
 
 	// One subrequest per object: existence check for downloads, dedup check for uploads
-	const headResponse = await readOnlyClient.fetch(getObjectUrl(env, repoId, oid), {
+	const headResponse = await readOnlyClient.fetch(getObjectUrl(env, storagePrefix, oid), {
 		method: 'HEAD',
 	})
 
@@ -687,7 +896,7 @@ async function processObject(
 			} satisfies GitLfsBatchResponseErrorObject
 		}
 
-		const signedUrl = await sign(readOnlyClient, env, `${repoId}/${oid}`, 'GET')
+		const signedUrl = await sign(readOnlyClient, env, `${storagePrefix}/${oid}`, 'GET')
 		return {
 			actions: {
 				download: {
@@ -714,7 +923,7 @@ async function processObject(
 	// The OID is the SHA-256 of the content, so signing it as the expected
 	// payload hash makes storage content-addressed: only the correct bytes can
 	// land at an object's address (on providers that enforce it)
-	const signedUrl = await sign(readWriteClient, env, `${repoId}/${oid}`, 'PUT', {
+	const signedUrl = await sign(readWriteClient, env, `${storagePrefix}/${oid}`, 'PUT', {
 		contentLength: size,
 		contentSha256: oid,
 	})

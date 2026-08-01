@@ -8,6 +8,7 @@ export default cspellConfig({
 		'extraheader',
 		'locksverify',
 		'miniflare',
+		'pipefail',
 		'subrequest',
 		'subrequests',
 	],

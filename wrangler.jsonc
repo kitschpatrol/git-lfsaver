@@ -27,7 +27,7 @@
 	 */
 	"vars": {
 		/* Comma-separated GitHub owners (users or orgs) whose repos may use this
-		 * server. Empty rejects everyone. */
+		 * server. Empty rejects everyone. Not consulted for self-issued repos. */
 		"ALLOWED_OWNERS": "kitschpatrol",
 		/* Some clients might not set headers correctly... */
 		"ENFORCE_MIME": true,
@@ -37,5 +37,10 @@
 		 * See https://developers.cloudflare.com/r2/platform/limits/
 		 */
 		"MAX_FILE_SIZE": 4995000000,
+		/* Base64url Ed25519 public key used to verify self-issued tokens for
+		 * repos that aren't on GitHub. Generate a key pair with
+		 * `pnpm run token generate-key` and paste the printed value here.
+		 * Empty disables self-issued tokens. */
+		"SELF_ISSUED_TOKEN_PUBLIC_KEY": "",
 	},
 }

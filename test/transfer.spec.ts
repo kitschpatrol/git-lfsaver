@@ -4,7 +4,7 @@
 import { createExecutionContext, waitOnExecutionContext } from 'cloudflare:test'
 // eslint-disable-next-line import/no-unresolved
 import { env } from 'cloudflare:workers'
-import { exportJWK, generateKeyPair, SignJWT } from 'jose'
+import { exportJWK, generateKeyPair, importJWK, SignJWT } from 'jose'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import type {
@@ -14,6 +14,7 @@ import type {
 } from '../src/schemas'
 import worker from '../src/index'
 import { gitLfsBatchResponseSchema } from '../src/schemas'
+import { selfIssuedTokenIssuer } from '../src/self-issued'
 
 const mime = 'application/vnd.git-lfs+json'
 const oidA = 'a'.repeat(64)
@@ -40,6 +41,22 @@ function patAuthHeader(token?: string): Record<string, string> {
 const githubActionsIssuer = 'https://token.actions.githubusercontent.com'
 const { privateKey, publicKey } = await generateKeyPair('RS256')
 const publicJwk = { ...(await exportJWK(publicKey)), alg: 'RS256', kid: 'test-key' }
+
+// Test-only signing key for self-issued tokens; the public half (the "x"
+// value) is bound as SELF_ISSUED_TOKEN_PUBLIC_KEY in vitest.config.ts
+const selfIssuedPrivateKey = await importJWK(
+	{
+		crv: 'Ed25519',
+		d: 'USbNlboLqsbcJbElbRsgwgYSnXEO8zthY960m02EJ9Q',
+		kty: 'OKP',
+		x: 'md403Y-XQZSe0jQscBC8anBx-IQlxvKmSjvV3LbAad0',
+	},
+	'EdDSA',
+)
+// Self-issued repos are addressed by a bare single-segment name that is
+// deliberately absent from ALLOWED_OWNERS — the signed token alone authorizes
+const selfIssuedRepoName = 'local-repo'
+const selfIssuedStoragePrefix = `self/${selfIssuedRepoName}`
 
 // The worker under test runs in the same isolate as the tests, so stubbing
 // global fetch intercepts its outbound GitHub and R2 subrequests. Each mock is
@@ -113,7 +130,12 @@ function mockGitHubError(status: number): void {
 	})
 }
 
-function mockObjectHead(oid: string, status: number, contentLength = 0): void {
+function mockObjectHead(
+	oid: string,
+	status: number,
+	contentLength = 0,
+	storagePrefix = String(repoId),
+): void {
 	pendingMocks.push({
 		method: 'HEAD',
 		response: () =>
@@ -121,7 +143,7 @@ function mockObjectHead(oid: string, status: number, contentLength = 0): void {
 				headers: { 'content-length': String(contentLength) },
 				status,
 			}),
-		url: `${bucketOrigin}/${repoId}/${oid}`,
+		url: `${bucketOrigin}/${storagePrefix}/${oid}`,
 	})
 }
 
@@ -141,6 +163,28 @@ async function signOidcToken(
 function oidcAuthHeader(token: string): Record<string, string> {
 	// eslint-disable-next-line no-restricted-globals
 	return { Authorization: `Basic ${btoa(`oidc:${token}`)}` }
+}
+
+async function signSelfIssuedToken(
+	claims: Record<string, unknown> = {},
+	options: {
+		audience?: string
+		expiresAt?: number | string
+		key?: Awaited<ReturnType<typeof importJWK>>
+		omitExpiry?: boolean
+	} = {},
+): Promise<string> {
+	const jwt = new SignJWT({ pull: true, push: true, repo: selfIssuedRepoName, ...claims })
+		.setProtectedHeader({ alg: 'EdDSA' })
+		.setIssuer(selfIssuedTokenIssuer)
+		.setAudience(options.audience ?? 'example.com')
+		.setIssuedAt()
+
+	if (options.omitExpiry !== true) {
+		jwt.setExpirationTime(options.expiresAt ?? '5m')
+	}
+
+	return jwt.sign(options.key ?? selfIssuedPrivateKey)
 }
 
 async function post(
@@ -165,6 +209,14 @@ async function postBatch(
 	headers?: Record<string, string>,
 ): Promise<Response> {
 	return post('/kitschpatrol/repo/objects/batch', { objects, operation }, headers)
+}
+
+async function postSelfBatch(
+	operation: 'download' | 'upload',
+	objects: Array<{ oid: string; size: number }>,
+	headers?: Record<string, string>,
+): Promise<Response> {
+	return post(`/${selfIssuedRepoName}/objects/batch`, { objects, operation }, headers)
 }
 
 async function parseBatchResponse(response: Response): Promise<GitLfsBatchResponse> {
@@ -460,5 +512,263 @@ describe('github actions oidc authentication', () => {
 		)
 		expect(response.status).toBe(401)
 		expect(response.headers.get('LFS-Authenticate')).toBe('Basic realm="Git LFS"')
+	})
+})
+
+describe('self-issued token authentication', () => {
+	it('allows downloads with a pull token and no external auth call', async () => {
+		// No GitHub API or JWKS mock is registered: an unexpected call would throw
+		mockObjectHead(oidA, 200, 8, selfIssuedStoragePrefix)
+		const token = await signSelfIssuedToken({ push: false })
+		const response = await postSelfBatch(
+			'download',
+			[{ oid: oidA, size: 8 }],
+			oidcAuthHeader(token),
+		)
+		expect(response.status).toBe(200)
+
+		const body = await parseBatchResponse(response)
+		const download = getSuccessObject(body, oidA).actions?.download
+		if (download === undefined) {
+			throw new Error('Expected download action')
+		}
+
+		// Objects live under a "self/" prefix that can never collide with the
+		// numeric GitHub repo IDs
+		expect(new URL(download.href).pathname).toBe(`/${selfIssuedStoragePrefix}/${oidA}`)
+	})
+
+	it('allows uploads with a push token', async () => {
+		mockObjectHead(oidA, 404, 0, selfIssuedStoragePrefix)
+		const token = await signSelfIssuedToken({ pull: false })
+		const response = await postSelfBatch('upload', [{ oid: oidA, size: 8 }], oidcAuthHeader(token))
+		expect(response.status).toBe(200)
+
+		const body = await parseBatchResponse(response)
+		const object = getSuccessObject(body, oidA)
+		const upload = object.actions?.upload
+		if (upload === undefined) {
+			throw new Error('Expected upload action')
+		}
+
+		expect(new URL(upload.href).pathname).toBe(`/${selfIssuedStoragePrefix}/${oidA}`)
+		// The verify action must use the single-segment URL shape too
+		expect(object.actions?.verify?.href).toBe(
+			`https://example.com/${selfIssuedRepoName}/objects/verify`,
+		)
+	})
+
+	it('verifies uploads with a push token', async () => {
+		mockObjectHead(oidA, 200, 8, selfIssuedStoragePrefix)
+		const token = await signSelfIssuedToken()
+		const response = await post(
+			`/${selfIssuedRepoName}/objects/verify`,
+			{ oid: oidA, size: 8 },
+			oidcAuthHeader(token),
+		)
+		expect(response.status).toBe(200)
+	})
+
+	it('denies uploads with a pull-only token', async () => {
+		const token = await signSelfIssuedToken({ push: false })
+		const response = await postSelfBatch('upload', [{ oid: oidA, size: 8 }], oidcAuthHeader(token))
+		expect(response.status).toBe(403)
+	})
+
+	it('denies downloads with a push-only token', async () => {
+		const token = await signSelfIssuedToken({ pull: false })
+		const response = await postSelfBatch(
+			'download',
+			[{ oid: oidA, size: 8 }],
+			oidcAuthHeader(token),
+		)
+		expect(response.status).toBe(403)
+	})
+
+	it('rejects tokens issued for a different repository', async () => {
+		const token = await signSelfIssuedToken({ repo: 'other-repo' })
+		const response = await postSelfBatch(
+			'download',
+			[{ oid: oidA, size: 8 }],
+			oidcAuthHeader(token),
+		)
+		expect(response.status).toBe(403)
+	})
+
+	it('matches the repo claim case-insensitively and lowercases the storage prefix', async () => {
+		mockObjectHead(oidA, 200, 8, selfIssuedStoragePrefix)
+		const token = await signSelfIssuedToken({ repo: 'Local-Repo' })
+		const response = await postSelfBatch(
+			'download',
+			[{ oid: oidA, size: 8 }],
+			oidcAuthHeader(token),
+		)
+		expect(response.status).toBe(200)
+	})
+
+	it('rejects tokens missing permission claims', async () => {
+		const token = await signSelfIssuedToken({ pull: undefined, push: undefined })
+		const response = await postSelfBatch(
+			'download',
+			[{ oid: oidA, size: 8 }],
+			oidcAuthHeader(token),
+		)
+		expect(response.status).toBe(403)
+	})
+
+	it('rejects repo claims that are not safe storage paths', async () => {
+		const token = await signSelfIssuedToken({ repo: '../12345' })
+		const response = await postSelfBatch(
+			'download',
+			[{ oid: oidA, size: 8 }],
+			oidcAuthHeader(token),
+		)
+		expect(response.status).toBe(403)
+	})
+
+	it('rejects expired tokens', async () => {
+		const token = await signSelfIssuedToken({}, { expiresAt: Math.floor(Date.now() / 1000) - 3600 })
+		const response = await postSelfBatch(
+			'download',
+			[{ oid: oidA, size: 8 }],
+			oidcAuthHeader(token),
+		)
+		expect(response.status).toBe(401)
+	})
+
+	it('rejects tokens without an expiry', async () => {
+		const token = await signSelfIssuedToken({}, { omitExpiry: true })
+		const response = await postSelfBatch(
+			'download',
+			[{ oid: oidA, size: 8 }],
+			oidcAuthHeader(token),
+		)
+		expect(response.status).toBe(401)
+	})
+
+	it('rejects tokens with the wrong audience', async () => {
+		const token = await signSelfIssuedToken({}, { audience: 'lfs.elsewhere.com' })
+		const response = await postSelfBatch(
+			'download',
+			[{ oid: oidA, size: 8 }],
+			oidcAuthHeader(token),
+		)
+		expect(response.status).toBe(401)
+	})
+
+	it('rejects tokens signed with a different key', async () => {
+		const { privateKey: otherKey } = await generateKeyPair('EdDSA', { crv: 'Ed25519' })
+		const token = await signSelfIssuedToken({}, { key: otherKey })
+		const response = await postSelfBatch(
+			'download',
+			[{ oid: oidA, size: 8 }],
+			oidcAuthHeader(token),
+		)
+		expect(response.status).toBe(401)
+	})
+
+	it('rejects GitHub credentials on single-segment paths', async () => {
+		// A PAT can never reach the GitHub API through a self-issued path
+		const response = await postSelfBatch('download', [{ oid: oidA, size: 8 }], patAuthHeader())
+		expect(response.status).toBe(401)
+		expect(response.headers.get('LFS-Authenticate')).toBe('Basic realm="Git LFS"')
+	})
+
+	it('rejects tokens without a GitHub grant on owner-qualified GitHub paths', async () => {
+		const token = await signSelfIssuedToken()
+		const response = await postBatch('download', [{ oid: oidA, size: 8 }], oidcAuthHeader(token))
+		expect(response.status).toBe(403)
+	})
+
+	it('rejects tokens when no public key is configured', async () => {
+		const token = await signSelfIssuedToken()
+		const request = new Request<unknown, IncomingRequestCfProperties>(
+			`https://example.com/${selfIssuedRepoName}/objects/batch`,
+			{
+				body: JSON.stringify({ objects: [{ oid: oidA, size: 8 }], operation: 'download' }),
+				headers: { Accept: mime, 'Content-Type': mime, ...oidcAuthHeader(token) },
+				method: 'POST',
+			},
+		)
+		const context = createExecutionContext()
+		const response = await worker.fetch(
+			request,
+			{ ...env, SELF_ISSUED_TOKEN_PUBLIC_KEY: '' },
+			context,
+		)
+		await waitOnExecutionContext(context)
+		expect(response.status).toBe(401)
+	})
+})
+
+describe('self-issued github grant authentication', () => {
+	// An explicit grant carries the GitHub repo's numeric ID and is presented
+	// on the same owner-qualified URL every other collaborator uses
+	const grantClaims = { github_repo_id: repoId, repo: 'kitschpatrol/repo' }
+
+	it('allows downloads from the GitHub storage prefix with no GitHub API call', async () => {
+		// No GitHub API mock is registered: an unexpected call would throw
+		mockObjectHead(oidA, 200, 8)
+		const token = await signSelfIssuedToken(grantClaims)
+		const response = await postBatch('download', [{ oid: oidA, size: 8 }], oidcAuthHeader(token))
+		expect(response.status).toBe(200)
+
+		const body = await parseBatchResponse(response)
+		const download = getSuccessObject(body, oidA).actions?.download
+		if (download === undefined) {
+			throw new Error('Expected download action')
+		}
+
+		// Same numeric prefix the PAT and OIDC paths resolve — shared storage
+		expect(new URL(download.href).pathname).toBe(`/${repoId}/${oidA}`)
+	})
+
+	it('allows uploads with a push grant', async () => {
+		mockObjectHead(oidA, 404)
+		const token = await signSelfIssuedToken({ ...grantClaims, pull: false })
+		const response = await postBatch('upload', [{ oid: oidA, size: 8 }], oidcAuthHeader(token))
+		expect(response.status).toBe(200)
+
+		const body = await parseBatchResponse(response)
+		expect(getSuccessObject(body, oidA).actions?.upload).toBeDefined()
+	})
+
+	it('denies operations the grant does not include', async () => {
+		const token = await signSelfIssuedToken({ ...grantClaims, push: false })
+		const response = await postBatch('upload', [{ oid: oidA, size: 8 }], oidcAuthHeader(token))
+		expect(response.status).toBe(403)
+	})
+
+	it('rejects grants presented for a different repository path', async () => {
+		const token = await signSelfIssuedToken({ ...grantClaims, repo: 'kitschpatrol/other' })
+		const response = await postBatch('download', [{ oid: oidA, size: 8 }], oidcAuthHeader(token))
+		expect(response.status).toBe(403)
+	})
+
+	it('rejects grants with a malformed repo ID', async () => {
+		const token = await signSelfIssuedToken({ ...grantClaims, github_repo_id: 'not-a-number' })
+		const response = await postBatch('download', [{ oid: oidA, size: 8 }], oidcAuthHeader(token))
+		expect(response.status).toBe(403)
+	})
+
+	it('rejects grants on single-segment paths', async () => {
+		// A grant's owner-qualified repo claim can never match a bare name
+		const token = await signSelfIssuedToken(grantClaims)
+		const response = await postSelfBatch(
+			'download',
+			[{ oid: oidA, size: 8 }],
+			oidcAuthHeader(token),
+		)
+		expect(response.status).toBe(403)
+	})
+
+	it('still enforces the owner allowlist before token verification', async () => {
+		const token = await signSelfIssuedToken({ ...grantClaims, repo: 'attacker/repo' })
+		const response = await post(
+			'/attacker/repo/objects/batch',
+			{ objects: [{ oid: oidA, size: 8 }], operation: 'download' },
+			oidcAuthHeader(token),
+		)
+		expect(response.status).toBe(403)
 	})
 })
