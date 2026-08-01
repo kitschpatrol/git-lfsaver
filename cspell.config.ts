@@ -6,6 +6,7 @@ export default cspellConfig({
 		'cloudflarestorage',
 		'dedup',
 		'extraheader',
+		'keypair',
 		'locksverify',
 		'miniflare',
 		'pipefail',
