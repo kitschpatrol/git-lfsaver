@@ -28,7 +28,7 @@ Two credential types are accepted:
 
 Only repositories belonging to owners listed in the `ALLOWED_OWNERS` variable are served — without this, anyone with a GitHub account could store data in your bucket.
 
-Uploads are constrained to the byte size the client declares (the size is signed into the URL), deduplicated against existing objects, and confirmed post-upload via the LFS `verify` action.
+Uploads are constrained to the byte size the client declares and to the object's SHA-256 — both are signed into the presigned URL, so on providers that validate `x-amz-content-sha256` (such as R2) only the correct bytes can land at an object's address. Uploads are also deduplicated against existing objects and confirmed post-upload via the LFS `verify` action.
 
 Storage speaks plain SigV4, so any S3-compatible provider that supports presigned URLs and virtual-hosted-style addressing (`https://<bucket>.<endpoint>/…`) should work by pointing `R2_S3_ENDPOINT` at it — though only R2 is tested. Providers that require path-style addressing or an explicit signing region would need small changes.
 

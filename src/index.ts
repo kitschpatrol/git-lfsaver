@@ -623,16 +623,23 @@ async function sign(
 	env: Env,
 	path: string,
 	method: 'GET' | 'PUT',
-	contentLength?: number,
+	uploadConstraints?: { contentLength: number; contentSha256: string },
 ): Promise<string> {
 	const url = new URL(`https://${env.R2_S3_BUCKET}.${env.R2_S3_ENDPOINT}`)
 	url.pathname = path
 	url.searchParams.set('X-Amz-Expires', String(env.EXPIRY))
 
 	// Signing content-length caps how many bytes the client can PUT with this
-	// URL; aws4fetch only signs it when allHeaders is set
+	// URL, and x-amz-content-sha256 declares the exact expected bytes, enforced
+	// by providers that validate it on presigned uploads. The client must send
+	// both headers verbatim; aws4fetch only signs them when allHeaders is set
 	const headers: Record<string, string> =
-		contentLength === undefined ? {} : { 'content-length': String(contentLength) }
+		uploadConstraints === undefined
+			? {}
+			: {
+					'content-length': String(uploadConstraints.contentLength),
+					'x-amz-content-sha256': uploadConstraints.contentSha256,
+				}
 
 	const signed = await s3.sign(url.href, {
 		aws: { allHeaders: true, signQuery: true },
@@ -704,11 +711,19 @@ async function processObject(
 		} satisfies GitLfsBatchResponseObject
 	}
 
-	const signedUrl = await sign(readWriteClient, env, `${repoId}/${oid}`, 'PUT', size)
+	// The OID is the SHA-256 of the content, so signing it as the expected
+	// payload hash makes storage content-addressed: only the correct bytes can
+	// land at an object's address (on providers that enforce it)
+	const signedUrl = await sign(readWriteClient, env, `${repoId}/${oid}`, 'PUT', {
+		contentLength: size,
+		contentSha256: oid,
+	})
 	return {
 		actions: {
 			upload: {
 				expires_in: env.EXPIRY,
+				// Sent by the client verbatim; must match the signed value
+				header: { 'x-amz-content-sha256': oid },
 				href: signedUrl,
 			},
 			verify: {

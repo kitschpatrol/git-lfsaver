@@ -307,9 +307,14 @@ describe('upload batch', () => {
 		const url = new URL(upload.href)
 		expect(url.origin).toBe(bucketOrigin)
 		expect(url.pathname).toBe(`/${repoId}/${oidA}`)
-		// Content-length is signed so the PUT cannot store more than it claims
-		expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe('content-length;host')
+		// Content-length caps the PUT's size and the signed content hash pins
+		// its bytes to the OID
+		expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe(
+			'content-length;host;x-amz-content-sha256',
+		)
 		expect(url.searchParams.get('X-Amz-Credential')?.startsWith(`${readWriteKeyId}/`)).toBe(true)
+		// The client must send the signed hash header verbatim
+		expect(upload.header?.['x-amz-content-sha256']).toBe(oidA)
 		expect(object.actions?.verify?.href).toBe(
 			'https://example.com/kitschpatrol/repo/objects/verify',
 		)
