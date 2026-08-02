@@ -9,7 +9,6 @@ export default cspellConfig({
 		'keypair',
 		'locksverify',
 		'miniflare',
-		'pipefail',
 		'subrequest',
 		'subrequests',
 	],

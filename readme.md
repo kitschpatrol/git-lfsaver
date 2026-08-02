@@ -189,7 +189,7 @@ Token caveats: a classic token needs the `repo` scope to see private repositorie
 
 ### GitHub Actions OIDC
 
-For CI only, and download-only by design. The workflow requests a short-lived OIDC token from GitHub Actions, which the worker verifies against GitHub's public keys — no stored secrets, and fork PRs can't obtain the token. The token's audience must equal the LFS server's hostname, and its cryptographically verified `repository` claim must match the repo in the URL. The [checkout action](https://github.com/kitschpatrol/github-action-checkout-git-lfs-cf) handles all of this; see [`sample-workflows/`](./sample-workflows/) for manual wiring.
+For CI only, and download-only by design. The workflow requests a short-lived OIDC token from GitHub Actions, which the worker verifies against GitHub's public keys — no stored secrets, and fork PRs can't obtain the token. The token's audience must equal the LFS server's hostname, and its cryptographically verified `repository` claim must match the repo in the URL. The [checkout action](https://github.com/kitschpatrol/github-action-checkout-git-lfs-cf) handles all of this.
 
 ### Self-issued tokens
 
