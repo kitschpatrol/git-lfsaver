@@ -118,13 +118,21 @@ Do this once on your dev machine:
 
 ### Git repository setup
 
-Do this once for each repo you'd like to use your new LFS server in on your development machine:
+Do this once for each repo you'd like to use your new LFS server in on your development machine.
 
-1. Create a `.lfsconfig` file in the root of your repo:
+These steps assume the repo is hosted on GitHub and has a GitHub remote configured — the `gh` command below reads the owner and repo name from that remote. For repos hosted elsewhere, see [Repos not on GitHub](#repos-not-on-github-self-issued-tokens).
+
+1. Create a `.lfsconfig` file in the root of your repo, letting `gh` fill in the owner and repo name from the current repo's GitHub remote:
+
+   ```sh
+   git config --file .lfsconfig lfs.url "https://lfs.example.com/$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
+   ```
+
+   This writes the committed config file:
 
    ```ini
    [lfs]
-   url = https://lfs.example.com/<repo-owner>/<repo-name>
+   	url = https://lfs.example.com/<repo-owner>/<repo-name>
    ```
 
    No `locksverify` setting is needed — the server signals that locking is unsupported and clients disable it automatically.
