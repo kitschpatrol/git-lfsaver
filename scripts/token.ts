@@ -77,7 +77,7 @@ async function resolveGitHubRepo(repoPath: string): Promise<{ fullName: string; 
 	const headers: Record<string, string> = {
 		// eslint-disable-next-line ts/naming-convention -- HTTP header name
 		Accept: 'application/vnd.github+json',
-		'User-Agent': 'git-lfs-cf-token-mint',
+		'User-Agent': 'git-lfsaver-token-mint',
 	}
 	if (token !== undefined) {
 		headers.Authorization = `Bearer ${token}`

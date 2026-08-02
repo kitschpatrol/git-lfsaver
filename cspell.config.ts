@@ -5,8 +5,9 @@ export default cspellConfig({
 	words: [
 		'cloudflarestorage',
 		'dedup',
-		'extraheader',
 		'keypair',
+		'lfsaver',
+		'lightseagreen',
 		'locksverify',
 		'miniflare',
 		'subrequest',

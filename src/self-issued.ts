@@ -10,7 +10,7 @@ import { z } from 'zod'
  * (`/<repo-name>/…`), unlike GitHub's `/<owner>/<repo>/…` — the path shape is
  * what routes a request to this credential type.
  */
-export const selfIssuedTokenIssuer = 'git-lfs-cf'
+export const selfIssuedTokenIssuer = 'git-lfsaver'
 
 const safeNameRegex = /^[\w.\-]+$/v
 

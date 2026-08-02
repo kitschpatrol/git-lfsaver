@@ -10,6 +10,9 @@ export default defineConfig({
 			// without .env, and never touch real infrastructure
 			miniflare: {
 				bindings: {
+					// Pinned here so tests don't depend on the deployment's
+					// allowlist in wrangler.jsonc
+					GITHUB_ALLOWED_OWNERS: ['kitschpatrol'],
 					S3_BUCKET: 'test-bucket',
 					S3_ENDPOINT: 'example.r2.cloudflarestorage.com',
 					S3_READ_KEY_ID: 'test-read-key',

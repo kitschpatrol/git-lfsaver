@@ -1,13 +1,9 @@
-<!-- title -->
-
-# git-lfs-cf
-
-<!-- /title -->
+# 🛟 Git LFSaver
 
 <!-- badges -->
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/license/mit)
-[![CI](https://github.com/kitschpatrol/git-lfs-cf/actions/workflows/ci.yml/badge.svg)](https://github.com/kitschpatrol/git-lfs-cf/actions/workflows/ci.yml)
+[![CI](https://github.com/kitschpatrol/git-lfsaver/actions/workflows/ci.yml/badge.svg)](https://github.com/kitschpatrol/git-lfsaver/actions/workflows/ci.yml)
 
 <!-- /badges -->
 
@@ -29,7 +25,7 @@ Since access control is delegated to GitHub, adding LFS to a repo doesn't requir
 
 A separate keypair-based authentication model is also available as an escape hatch for repositories hosted elsewhere or to accommodate future migration off of GitHub.
 
-For ease of integration with GitHub Actions workflows, a [`kitschpatrol/github-action-checkout-git-lfs-cf`](https://github.com/kitschpatrol/github-action-checkout-git-lfs-cf) is available as a drop-in replacement for `actions/checkout` in any workflows requiring access to smudged LFS assets.
+For ease of integration with GitHub Actions workflows, a [`kitschpatrol/github-action-checkout-git-lfsaver`](https://github.com/kitschpatrol/github-action-checkout-git-lfsaver) is available as a drop-in replacement for `actions/checkout` in any workflows requiring access to smudged LFS assets.
 
 ## Getting started
 
@@ -64,12 +60,12 @@ Do this once to host LFS files for as many repositories as you'd like. We'll ass
 4. Clone this repo:
 
    ```sh
-   gh repo clone kitschpatrol/git-lfs-cf
+   gh repo clone kitschpatrol/git-lfsaver
    ```
 
 5. Configure `wrangler.jsonc` in the cloned repository root:
 
-   - `GITHUB_ALLOWED_OWNERS`: comma-separated GitHub users or orgs whose repositories may use the server. An empty value rejects everyone.
+   - `GITHUB_ALLOWED_OWNERS`: array of GitHub users or orgs whose repositories may use the server. An empty array rejects everyone.
    - `routes`: your custom domain, e.g. `lfs.example.com`.
    - Optionally adjust `EXPIRY` (presigned URL lifetime in seconds) and `MAX_FILE_SIZE` (bytes, capped by [R2's single-PUT limit](https://developers.cloudflare.com/r2/platform/limits/)).
 
@@ -158,7 +154,7 @@ These steps assume the repo is hosted on GitHub and has a GitHub remote configur
 
 If your actions don't need access to smudged LFS assets, then the typical `actions/checkout` action will continue to work just fine in your workflows. (Just don't set the `lfs: true` option.)
 
-If you _do_ need access to the LFS assets, then you'll want to use [`kitschpatrol/github-action-checkout-git-lfs-cf`](https://github.com/kitschpatrol/github-action-checkout-git-lfs-cf) as a drop-in replacement for `actions/checkout`.
+If you _do_ need access to the LFS assets, then you'll want to use [`kitschpatrol/github-action-checkout-git-lfsaver`](https://github.com/kitschpatrol/github-action-checkout-git-lfsaver) as a drop-in replacement for `actions/checkout`.
 
 ```yaml
 permissions:
@@ -166,12 +162,12 @@ permissions:
   id-token: write
 
 steps:
-  - uses: kitschpatrol/github-action-checkout-git-lfs-cf@v1
+  - uses: kitschpatrol/github-action-checkout-git-lfsaver@v1
 
   # Any other steps you'd like that need access to LFS assets...
 ```
 
-By default, authentication is handled via an OIDC token. No secrets are stored, and fork PRs can't obtain the token. See the [action's readme](https://github.com/kitschpatrol/github-action-checkout-git-lfs-cf) for more details on configuration and authentication.
+By default, authentication is handled via an OIDC token. No secrets are stored, and fork PRs can't obtain the token. See the [action's readme](https://github.com/kitschpatrol/github-action-checkout-git-lfsaver) for more details on configuration and authentication.
 
 ## Authentication strategies
 
@@ -189,7 +185,7 @@ Token caveats: a classic token needs the `repo` scope to see private repositorie
 
 ### GitHub Actions OIDC
 
-For CI only, and download-only by design. The workflow requests a short-lived OIDC token from GitHub Actions, which the worker verifies against GitHub's public keys — no stored secrets, and fork PRs can't obtain the token. The token's audience must equal the LFS server's hostname, and its cryptographically verified `repository` claim must match the repo in the URL. The [checkout action](https://github.com/kitschpatrol/github-action-checkout-git-lfs-cf) handles all of this.
+For CI only, and download-only by design. The workflow requests a short-lived OIDC token from GitHub Actions, which the worker verifies against GitHub's public keys — no stored secrets, and fork PRs can't obtain the token. The token's audience must equal the LFS server's hostname, and its cryptographically verified `repository` claim must match the repo in the URL. The [checkout action](https://github.com/kitschpatrol/github-action-checkout-git-lfsaver) handles all of this.
 
 ### Self-issued tokens
 
@@ -331,7 +327,7 @@ Use [self-issued tokens](#repos-not-on-github-self-issued-tokens): the repo gets
 
 ### What if I'm using a forge other than GitHub?
 
-Bitbucket, GitLab, and friends work today via [self-issued tokens](#repos-not-on-github-self-issued-tokens), just without the delegated authentication GitHub repos enjoy. The [URL scheme](#url-scheme) and storage layout already reserve room for authenticating through other providers natively — if you'd like that, [open an issue](https://github.com/kitschpatrol/git-lfs-cf/issues).
+Bitbucket, GitLab, and friends work today via [self-issued tokens](#repos-not-on-github-self-issued-tokens), just without the delegated authentication GitHub repos enjoy. The [URL scheme](#url-scheme) and storage layout already reserve room for authenticating through other providers natively — if you'd like that, [open an issue](https://github.com/kitschpatrol/git-lfsaver/issues).
 
 ### What if I want to migrate my repo off GitHub in the future?
 
@@ -355,7 +351,7 @@ GitHub authentication strategy inspired by [Alan Edwardes'](https://alanedwardes
 
 ## Contributing
 
-[Issues](https://github.com/kitschpatrol/git-lfs-cf/issues) are welcome and appreciated.
+[Issues](https://github.com/kitschpatrol/git-lfsaver/issues) are welcome and appreciated.
 
 Please open an issue to discuss changes before submitting a pull request. Unsolicited PRs (especially AI-generated ones) are unlikely to be merged.
 

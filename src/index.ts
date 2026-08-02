@@ -269,7 +269,7 @@ function getStaticResponse(request: Request, url: URL, requestId: string): Respo
 	if (url.pathname === '/') {
 		if (request.method === 'GET') {
 			return new Response(
-				'<!DOCTYPE html><html style="background-color:gray;"><head><meta charset="utf-8"><title>git-lfs-cf</title></head><body style="margin:0;padding:0;height:100vh;display:flex;align-items:center;justify-content:center"><h1 style="margin:0;font-size:6em">🪨</h1></body></html>',
+				'<!DOCTYPE html><html style="background-color:lightseagreen;"><head><meta charset="utf-8"><title>Git LFSaver</title></head><body style="margin:0;padding:0;height:100vh;display:flex;align-items:center;justify-content:center"><h1 style="margin:0;font-size:6em">🛟</h1></body></html>',
 				{
 					headers: {
 						'Content-Type': 'text/html; charset=utf-8',
@@ -291,7 +291,7 @@ function getStaticResponse(request: Request, url: URL, requestId: string): Respo
 	}
 
 	if (url.pathname === '/favicon.ico') {
-		const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 16 16'><text x='0' y='14'>🪨</text></svg>`
+		const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='48' height='48' viewBox='0 0 16 16'><text x='0' y='14'>🛟</text></svg>`
 		return new Response(svg, {
 			headers: {
 				'Cache-Control': 'public, max-age=86400',
@@ -935,15 +935,10 @@ function lfsErrorResponse(
 	)
 }
 
-function isOwnerAllowed(owner: string, allowedOwners: string): boolean {
-	// GitHub owner names are case-insensitive
-	const allowed = allowedOwners
-		.split(',')
-		.map((entry) => entry.trim().toLowerCase())
-		.filter((entry) => entry.length > 0)
-
-	// An empty allowlist rejects everyone (fail closed)
-	return allowed.includes(owner.toLowerCase())
+function isOwnerAllowed(owner: string, allowedOwners: string[]): boolean {
+	// GitHub owner names are case-insensitive; an empty allowlist rejects
+	// everyone (fail closed)
+	return allowedOwners.some((entry) => entry.toLowerCase() === owner.toLowerCase())
 }
 
 function getCredential(request: Request): string | undefined {

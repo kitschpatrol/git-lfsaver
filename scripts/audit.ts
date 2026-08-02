@@ -177,7 +177,7 @@ async function resolveGitHubRepo(
 ): Promise<{ repo: string; status: PrefixReport['status'] }> {
 	const headers: Record<string, string> = {
 		Accept: 'application/vnd.github+json',
-		'User-Agent': 'git-lfs-cf-storage-audit',
+		'User-Agent': 'git-lfsaver-storage-audit',
 	}
 	if (token !== undefined) {
 		headers.Authorization = `Bearer ${token}`

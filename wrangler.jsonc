@@ -4,7 +4,7 @@
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "git-lfs-cf",
+	"name": "git-lfsaver",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-07-30",
 	"observability": {
@@ -16,7 +16,8 @@
 	},
 	"routes": [
 		{
-			"pattern": "lfs.kitschpatrol.com",
+			// Your domain
+			"pattern": "lfs.example.com",
 			"custom_domain": true,
 		},
 	],
@@ -26,9 +27,9 @@
 	 * R2 credentials are uploaded as string secrets from .env (see .template.env)
 	 */
 	"vars": {
-		/* Comma-separated GitHub owners (users or orgs) whose repos may use this
-		 * server. Empty rejects everyone. Not consulted for self-issued repos. */
-		"GITHUB_ALLOWED_OWNERS": "kitschpatrol",
+		/* GitHub owners (users or orgs) whose repos may use this server. An
+		 * empty array rejects everyone. Not consulted for self-issued repos. */
+		"GITHUB_ALLOWED_OWNERS": ["example"],
 		/* Some clients might not set headers correctly... */
 		"ENFORCE_MIME": true,
 		/* Pre-signed URL expiry in seconds. Expiry gates when a transfer may

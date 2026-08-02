@@ -1,5 +1,5 @@
 {
-	"name": "git-lfs-cf",
+	"name": "git-lfsaver",
 	"version": "0.0.1",
 	"private": true,
 	"description": "A serverless Git LFS server for Cloudflare Workers + R2",
@@ -13,11 +13,11 @@
 		"r2",
 		"s3"
 	],
-	"homepage": "https://github.com/kitschpatrol/git-lfs-cf",
-	"bugs": "https://github.com/kitschpatrol/git-lfs-cf/issues",
+	"homepage": "https://github.com/kitschpatrol/git-lfsaver",
+	"bugs": "https://github.com/kitschpatrol/git-lfsaver/issues",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/kitschpatrol/git-lfs-cf.git"
+		"url": "git+https://github.com/kitschpatrol/git-lfsaver.git"
 	},
 	"license": "MIT",
 	"author": {
