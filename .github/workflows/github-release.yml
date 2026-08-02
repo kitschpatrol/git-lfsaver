@@ -41,7 +41,7 @@ jobs:
         run: |
           TAG=$(git tag --contains HEAD | grep -E '^v?[0-9]' | head -n 1)
           echo "🏷️ Tag for commit is: $TAG"
-          BRANCH=$(git branch -r --contains tags/${GITHUB_REF_NAME} | grep 'origin/main' | xargs)
+          BRANCH=$(git branch -r --contains "tags/${GITHUB_REF_NAME}" | grep 'origin/main' | xargs)
           if [[ -z "$BRANCH" ]]; then
             echo "🚨 Tag is not on main branch"
           else
@@ -49,7 +49,7 @@ jobs:
           fi
           if [[ -z "$TAG" || -z "$BRANCH" ]]; then
             echo "IS_VALID_COMMIT=false" >> "$GITHUB_ENV"
-            echo "TAG_NAME=''" >> "$GITHUB_ENV"
+            echo "TAG_NAME=" >> "$GITHUB_ENV"
           else
             echo "IS_VALID_COMMIT=true" >> "$GITHUB_ENV"
             echo "TAG_NAME=$TAG" >> "$GITHUB_ENV"
