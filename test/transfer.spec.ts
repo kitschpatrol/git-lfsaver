@@ -54,7 +54,7 @@ const selfIssuedPrivateKey = await importJWK(
 	'EdDSA',
 )
 // Self-issued repos are addressed by a bare single-segment name that is
-// deliberately absent from ALLOWED_OWNERS — the signed token alone authorizes
+// deliberately absent from GITHUB_ALLOWED_OWNERS — the signed token alone authorizes
 const selfIssuedRepoName = 'local-repo'
 const selfIssuedStoragePrefix = `self/${selfIssuedRepoName}`
 
@@ -134,7 +134,7 @@ function mockObjectHead(
 	oid: string,
 	status: number,
 	contentLength = 0,
-	storagePrefix = String(repoId),
+	storagePrefix = `github.com/${repoId}`,
 ): void {
 	pendingMocks.push({
 		method: 'HEAD',
@@ -313,7 +313,7 @@ describe('download batch', () => {
 		expect(download.expires_in).toBe(env.EXPIRY)
 		const url = new URL(download.href)
 		expect(url.origin).toBe(bucketOrigin)
-		expect(url.pathname).toBe(`/${repoId}/${oidA}`)
+		expect(url.pathname).toBe(`/github.com/${repoId}/${oidA}`)
 		expect(url.searchParams.get('X-Amz-Expires')).toBe(String(env.EXPIRY))
 		expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe('host')
 		expect(url.searchParams.get('X-Amz-Credential')?.startsWith(`${readKeyId}/`)).toBe(true)
@@ -358,7 +358,7 @@ describe('upload batch', () => {
 
 		const url = new URL(upload.href)
 		expect(url.origin).toBe(bucketOrigin)
-		expect(url.pathname).toBe(`/${repoId}/${oidA}`)
+		expect(url.pathname).toBe(`/github.com/${repoId}/${oidA}`)
 		// Content-length caps the PUT's size and the signed content hash pins
 		// its bytes to the OID
 		expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe(
@@ -720,7 +720,7 @@ describe('self-issued github grant authentication', () => {
 		}
 
 		// Same numeric prefix the PAT and OIDC paths resolve — shared storage
-		expect(new URL(download.href).pathname).toBe(`/${repoId}/${oidA}`)
+		expect(new URL(download.href).pathname).toBe(`/github.com/${repoId}/${oidA}`)
 	})
 
 	it('allows uploads with a push grant', async () => {
@@ -807,7 +807,7 @@ describe('anonymous public repo downloads', () => {
 
 	it('allows downloads from public repos with no credential', async () => {
 		mockPublicRepo('anon-public', 111)
-		mockObjectHead(oidA, 200, 8, '111')
+		mockObjectHead(oidA, 200, 8, 'github.com/111')
 		const response = await postAnonymous('anon-public', 'download')
 		expect(response.status).toBe(200)
 
@@ -819,15 +819,15 @@ describe('anonymous public repo downloads', () => {
 
 		// Anonymous downloads resolve the same numeric storage prefix as
 		// credentialed GitHub access
-		expect(new URL(download.href).pathname).toBe(`/111/${oidA}`)
+		expect(new URL(download.href).pathname).toBe(`/github.com/111/${oidA}`)
 	})
 
 	it('caches the public visibility lookup', async () => {
 		// A single GitHub response is mocked for two batches: a second API call
 		// would throw on the unmatched fetch
 		mockPublicRepo('anon-cached', 222)
-		mockObjectHead(oidA, 200, 8, '222')
-		mockObjectHead(oidA, 200, 8, '222')
+		mockObjectHead(oidA, 200, 8, 'github.com/222')
+		mockObjectHead(oidA, 200, 8, 'github.com/222')
 
 		const first = await postAnonymous('anon-cached', 'download')
 		expect(first.status).toBe(200)
@@ -863,5 +863,57 @@ describe('anonymous public repo downloads', () => {
 			{},
 		)
 		expect(response.status).toBe(401)
+	})
+})
+
+describe('explicit provider host paths', () => {
+	it('treats /github.com/<owner>/<repo> the same as the two-segment default', async () => {
+		mockGitHubRepo({ pull: true, push: true })
+		mockObjectHead(oidA, 404)
+		const response = await post('/github.com/kitschpatrol/repo/objects/batch', {
+			objects: [{ oid: oidA, size: 8 }],
+			operation: 'upload',
+		})
+		expect(response.status).toBe(200)
+
+		const body = await parseBatchResponse(response)
+		const object = getSuccessObject(body, oidA)
+		const upload = object.actions?.upload
+		if (upload === undefined) {
+			throw new Error('Expected upload action')
+		}
+
+		// Storage resolves to the same provider-namespaced prefix as the
+		// two-segment form, and the verify URL echoes the explicit host shape
+		expect(new URL(upload.href).pathname).toBe(`/github.com/${repoId}/${oidA}`)
+		expect(object.actions?.verify?.href).toBe(
+			'https://example.com/github.com/kitschpatrol/repo/objects/verify',
+		)
+	})
+
+	it('matches the host case-insensitively', async () => {
+		mockGitHubRepo({ pull: true, push: false })
+		mockObjectHead(oidA, 200, 8)
+		const response = await post('/GitHub.com/kitschpatrol/repo/objects/batch', {
+			objects: [{ oid: oidA, size: 8 }],
+			operation: 'download',
+		})
+		expect(response.status).toBe(200)
+	})
+
+	it('rejects unsupported provider hosts', async () => {
+		const response = await post('/bitbucket.org/kitschpatrol/repo/objects/batch', {
+			objects: [{ oid: oidA, size: 8 }],
+			operation: 'download',
+		})
+		expect(response.status).toBe(404)
+	})
+
+	it('still enforces the owner allowlist on explicit host paths', async () => {
+		const response = await post('/github.com/attacker/repo/objects/batch', {
+			objects: [{ oid: oidA, size: 8 }],
+			operation: 'download',
+		})
+		expect(response.status).toBe(403)
 	})
 })

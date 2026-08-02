@@ -69,7 +69,7 @@ Do this once to host LFS files for as many repositories as you'd like. We'll ass
 
 5. Configure `wrangler.jsonc` in the cloned repository root:
 
-   - `ALLOWED_OWNERS`: comma-separated GitHub users or orgs whose repositories may use the server. An empty value rejects everyone.
+   - `GITHUB_ALLOWED_OWNERS`: comma-separated GitHub users or orgs whose repositories may use the server. An empty value rejects everyone.
    - `routes`: your custom domain, e.g. `lfs.example.com`.
    - Optionally adjust `EXPIRY` (presigned URL lifetime in seconds) and `MAX_FILE_SIZE` (bytes, capped by [R2's single-PUT limit](https://developers.cloudflare.com/r2/platform/limits/)).
 
@@ -189,13 +189,23 @@ The escape hatch when GitHub isn't in the picture: signed Ed25519 JWTs minted by
 
 ## Advanced configuration
 
+### URL scheme
+
+The path segments before `/objects/batch` identify the repository, and the segment count selects the provider:
+
+- `/<repo-name>` — a [self-issued](#repos-not-on-github-self-issued-tokens) (non-GitHub) repo
+- `/<owner>/<repo>` — a GitHub repo (the default provider)
+- `/<host>/<owner>/<repo>` — explicit provider host; `/github.com/<owner>/<repo>` is an alias for the two-segment form, and other forge hosts (`bitbucket.org/…`, `gitlab.com/…`) are reserved for possible future support
+
+Storage in the bucket is namespaced the same way: `github.com/<repo-id>/<oid>` for GitHub repos (keyed by the immutable numeric ID, so renames never move data) and `self/<repo-name>/<oid>` for self-issued repos.
+
 ### Repos not on GitHub (self-issued tokens)
 
 If a repository isn't hosted on GitHub — a bare repo on your own server, a mirror, a local-only project — there's no forge API to delegate authorization to. Instead, whoever operates the LFS server mints signed tokens and hands them out. The worker verifies them against a public key with no external calls and no user database; the private key never leaves the operator's machine.
 
 The `pnpm run token` commands below run in your clone of this repository (the same one you deploy the worker from), not in the repo that uses LFS.
 
-Self-issued repos are addressed by a bare single-segment name — `https://lfs.example.com/<repo-name>` — with no owner. The path shape selects the credential type: single-segment URLs accept only self-issued tokens, while owner-qualified `/<owner>/<repo>` URLs accept GitHub credentials — or a self-issued token carrying an [explicit grant](#sharing-a-github-backed-repo-without-a-github-account) minted with `--github-repo-id`. Because the token itself is the authorization, `ALLOWED_OWNERS` plays no part for single-segment repos.
+Self-issued repos are addressed by a bare single-segment name — `https://lfs.example.com/<repo-name>` — with no owner. The path shape selects the credential type: single-segment URLs accept only self-issued tokens, while owner-qualified `/<owner>/<repo>` URLs accept GitHub credentials — or a self-issued token carrying an [explicit grant](#sharing-a-github-backed-repo-without-a-github-account) minted with `--github-repo-id`. Because the token itself is the authorization, `GITHUB_ALLOWED_OWNERS` plays no part for single-segment repos.
 
 **One-time server setup:**
 
@@ -289,7 +299,7 @@ Hosting your own LFS also provides more flexibility for moving your repo elsewhe
 
 ### What if I put the wrong path in the `.lfsconfig` url?
 
-Almost always a clear error: unknown repos get a 404, owners outside `ALLOWED_OWNERS` get a 403, and token-bound credentials (OIDC, self-issued) refuse any URL that doesn't match their signed claims. The one silent case is a personal access token with a wrong-but-real repo path you can push to — uploads would land in _that_ repo's storage namespace, and downloads failing with per-object 404s are usually the tell.
+Almost always a clear error: unknown repos get a 404, owners outside `GITHUB_ALLOWED_OWNERS` get a 403, and token-bound credentials (OIDC, self-issued) refuse any URL that doesn't match their signed claims. The one silent case is a personal access token with a wrong-but-real repo path you can push to — uploads would land in _that_ repo's storage namespace, and downloads failing with per-object 404s are usually the tell.
 
 ### What if I have a file larger than 5 GB?
 
@@ -301,23 +311,27 @@ Nothing breaks: objects are stored under GitHub's immutable numeric repo ID, and
 
 ### What if I transfer ownership of my GitHub repo?
 
-The numeric repo ID survives ownership transfers, so stored objects remain accessible. Add the new owner to `ALLOWED_OWNERS`, redeploy, and update the `.lfsconfig` URL to the new path.
+The numeric repo ID survives ownership transfers, so stored objects remain accessible. Add the new owner to `GITHUB_ALLOWED_OWNERS`, redeploy, and update the `.lfsconfig` URL to the new path.
 
 ### What if I delete my repo?
 
-The stored objects are stranded, not deleted: the worker has no deletion path, and once GitHub stops recognizing the repo nobody can authorize against it — but its objects keep occupying (and billing) bucket space under the repo's numeric ID prefix. Run `pnpm run audit` (in your clone of this repo) to list every prefix with its repository, object count, size, and status — deleted repos show as `orphaned` — then remove those prefixes from the bucket with `wrangler`, `rclone`, or the Cloudflare dashboard. This is a feature as much as a gap: it's your data in your bucket, recoverable until you delete it — unlike GitHub LFS, where purging data requires a support ticket.
+The stored objects are stranded, not deleted: the worker has no deletion path, and once GitHub stops recognizing the repo nobody can authorize against it — but its objects keep occupying (and billing) bucket space under the repo's `github.com/<id>` prefix. Run `pnpm run audit` (in your clone of this repo) to list every prefix with its repository, object count, size, and status — deleted repos show as `orphaned` — then remove those prefixes from the bucket with `wrangler`, `rclone`, or the Cloudflare dashboard. This is a feature as much as a gap: it's your data in your bucket, recoverable until you delete it — unlike GitHub LFS, where purging data requires a support ticket.
 
 ### What if my repo's not hosted on GitHub?
 
 Use [self-issued tokens](#repos-not-on-github-self-issued-tokens): the repo gets a single-segment URL (`https://lfs.example.com/<repo-name>`) and you mint signed tokens for each person — no GitHub involvement at any step.
 
+### What if I'm using a forge other than GitHub?
+
+Bitbucket, GitLab, and friends work today via [self-issued tokens](#repos-not-on-github-self-issued-tokens), just without the delegated authentication GitHub repos enjoy. The [URL scheme](#url-scheme) and storage layout already reserve room for authenticating through other providers natively — if you'd like that, [open an issue](https://github.com/kitschpatrol/git-lfs-cf/issues).
+
 ### What if I want to migrate my repo off GitHub in the future?
 
-No history rewriting needed: LFS objects are content-addressed, so you copy them bucket-side from the numeric GitHub prefix to `self/<repo-name>`, commit a `.lfsconfig` pointing at the single-segment URL, and switch collaborators to self-issued tokens. Existing clones that check out pre-migration history need a one-line `git config lfs.url` override, which takes precedence over the committed `.lfsconfig` everywhere.
+No history rewriting needed: LFS objects are content-addressed, so you copy them bucket-side from the `github.com/<id>` prefix to `self/<repo-name>`, commit a `.lfsconfig` pointing at the single-segment URL, and switch collaborators to self-issued tokens. Existing clones that check out pre-migration history need a one-line `git config lfs.url` override, which takes precedence over the committed `.lfsconfig` everywhere.
 
 ### What if I'm not on GitHub now, but move there later?
 
-The same move in reverse: once the repo exists on GitHub, look up its numeric ID (`gh api repos/<owner>/<name> --jq .id`), copy objects from `self/<repo-name>` to that ID's prefix in the bucket, and point `.lfsconfig` at the owner-qualified URL — GitHub credentials take over from there.
+The same move in reverse: once the repo exists on GitHub, look up its numeric ID (`gh api repos/<owner>/<name> --jq .id`), copy objects from `self/<repo-name>` to `github.com/<id>` in the bucket, and point `.lfsconfig` at the owner-qualified URL — GitHub credentials take over from there.
 
 ## Maintainers
 

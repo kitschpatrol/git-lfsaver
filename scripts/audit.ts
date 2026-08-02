@@ -163,9 +163,11 @@ async function listObjects(config_: BucketConfig): Promise<Array<{ key: string; 
 }
 
 function getPrefix(key: string): string {
+	// Storage is namespaced as <provider>/<stable-id>/<oid>: github.com/<id>
+	// for GitHub repos, self/<name> for self-issued repos
 	const segments = key.split('/')
-	if (segments[0] === 'self' && segments.length > 1) {
-		return `self/${segments[1] ?? ''}`
+	if ((segments[0] === 'github.com' || segments[0] === 'self') && segments.length > 1) {
+		return `${segments[0]}/${segments[1] ?? ''}`
 	}
 
 	return segments[0] ?? key
@@ -287,11 +289,14 @@ if (objects.length === 0) {
 				}
 			}
 
-			if (!numericPrefixRegex.test(prefix)) {
+			const githubId = prefix.startsWith('github.com/')
+				? prefix.slice('github.com/'.length)
+				: undefined
+			if (githubId === undefined || !numericPrefixRegex.test(githubId)) {
 				return { ...stats, prefix, repo: '(unrecognized prefix)', status: 'error' as const }
 			}
 
-			const resolved = await resolveGitHubRepo(prefix, token)
+			const resolved = await resolveGitHubRepo(githubId, token)
 			return { ...stats, prefix, ...resolved }
 		}),
 	)

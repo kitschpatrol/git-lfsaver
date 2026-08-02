@@ -78,6 +78,12 @@ async function getSelfIssuedPublicKey(publicKey: string): Promise<CryptoKey | Ui
 // eslint-disable-next-line no-control-regex
 const controlCharacterRegex = /[\u{0}-\u{1F}\u{7F}]/v
 
+const batchPathSuffixRegex = /\/objects\/batch$/v
+
+// Storage keys are namespaced per provider (`github.com/<id>/…`,
+// `self/<name>/…`) so future forges can never collide with existing prefixes
+const githubStoragePrefix = 'github.com'
+
 type CachedAuthorization = {
 	expiresAt: number
 	permissions: { pull: boolean; push: boolean }
@@ -159,58 +165,85 @@ export default {
 			return mimeResponse
 		}
 
-		// Expect /<owner>/<repo>/objects/<batch|verify> for GitHub repos, or
-		// /<repo-name>/objects/<batch|verify> for self-issued (non-GitHub) repos
 		const pathParts = url.pathname.split('/')
 		const isBatch = url.pathname.endsWith('/objects/batch')
 		const isVerify = url.pathname.endsWith('/objects/verify')
-		if ((isBatch || isVerify) && (pathParts.length === 4 || pathParts.length === 5)) {
-			let address: RepoAddress
-			if (pathParts.length === 5) {
-				const owner = decodeURIComponent(pathParts[1] ?? '')
-				const repo = decodeURIComponent(pathParts[2] ?? '')
-				if (owner.length === 0 || repo.length === 0) {
-					return lfsErrorResponse(
-						`Invalid request URL pathname, expect "/<owner>/<repo>/objects/batch", received "${url.pathname}" Double check your lfs.url value in your .lfsconfig file.`,
-						requestId,
-						422,
-					)
-				}
-
-				// Reject repos outside the allowlist before doing any real work,
-				// otherwise anyone with a GitHub account can store objects in the
-				// bucket. Self-issued (single-segment) paths skip this: their
-				// authorization is the admin-signed token itself.
-				if (!isOwnerAllowed(owner, env.ALLOWED_OWNERS)) {
-					return lfsErrorResponse(
-						`Repository owner "${owner}" is not allowed to use this LFS server.`,
-						requestId,
-						403,
-					)
-				}
-
-				address = { owner, repo, type: 'github' }
-			} else {
-				const name = decodeURIComponent(pathParts[1] ?? '')
-				if (name.length === 0) {
-					return lfsErrorResponse(
-						`Invalid request URL pathname, expect "/<repo-name>/objects/batch", received "${url.pathname}" Double check your lfs.url value in your .lfsconfig file.`,
-						requestId,
-						422,
-					)
-				}
-
-				address = { name, type: 'self' }
+		if ((isBatch || isVerify) && pathParts.length >= 4 && pathParts.length <= 6) {
+			const parsed = parseRepoAddress(pathParts, url.pathname, env, requestId)
+			if ('errorResponse' in parsed) {
+				return parsed.errorResponse
 			}
 
 			return isBatch
-				? handleBatch(request, env, address, requestId)
-				: handleVerify(request, env, address, requestId)
+				? handleBatch(request, env, parsed.address, requestId)
+				: handleVerify(request, env, parsed.address, requestId)
 		}
 
 		return lfsErrorResponse('Not found.', requestId, 404)
 	},
 } satisfies ExportedHandler<Env>
+
+/**
+ * Repos are addressed by the path segments before `/objects/<batch|verify>`,
+ * and the segment count selects the provider:
+ *
+ * - `/<repo-name>` — self-issued (non-GitHub) repos
+ * - `/<owner>/<repo>` — GitHub (the default provider)
+ * - `/<host>/<owner>/<repo>` — explicit provider host; only github.com today,
+ *   other forges reserved for later
+ */
+function parseRepoAddress(
+	pathParts: string[],
+	pathname: string,
+	env: Env,
+	requestId: string,
+): { address: RepoAddress } | { errorResponse: Response } {
+	const repoSegments = pathParts.slice(1, -2).map((part) => decodeURIComponent(part))
+	if (repoSegments.some((segment) => segment.length === 0)) {
+		return {
+			errorResponse: lfsErrorResponse(
+				`Invalid request URL pathname, expect "/<owner>/<repo>/objects/batch" (GitHub), "/<host>/<owner>/<repo>/objects/batch", or "/<repo-name>/objects/batch" (self-issued), received "${pathname}" Double check your lfs.url value in your .lfsconfig file.`,
+				requestId,
+				422,
+			),
+		}
+	}
+
+	if (repoSegments.length === 1) {
+		return { address: { name: repoSegments[0] ?? '', type: 'self' } }
+	}
+
+	if (repoSegments.length === 3) {
+		const host = (repoSegments.shift() ?? '').toLowerCase()
+		if (host !== 'github.com') {
+			return {
+				errorResponse: lfsErrorResponse(
+					`Unsupported provider host "${host}". Only "github.com" repositories are supported on explicit three-segment paths.`,
+					requestId,
+					404,
+				),
+			}
+		}
+	}
+
+	const [owner = '', repo = ''] = repoSegments
+
+	// Reject repos outside the allowlist before doing any real work, otherwise
+	// anyone with a GitHub account can store objects in the bucket. Self-issued
+	// (single-segment) paths skip this: their authorization is the admin-signed
+	// token itself.
+	if (!isOwnerAllowed(owner, env.GITHUB_ALLOWED_OWNERS)) {
+		return {
+			errorResponse: lfsErrorResponse(
+				`Repository owner "${owner}" is not allowed to use this LFS server.`,
+				requestId,
+				403,
+			),
+		}
+	}
+
+	return { address: { owner, repo, type: 'github' } }
+}
 
 function getStaticResponse(request: Request, url: URL, requestId: string): Response | undefined {
 	if (url.pathname === '/') {
@@ -304,7 +337,12 @@ async function handleBatch(
 		env,
 		...createR2Clients(env),
 		storagePrefix: authorization.storagePrefix,
-		verifyUrl: new URL(`${getRepoUrlPath(address)}/objects/verify`, request.url).href,
+		// Echo the request's own path shape (default, explicit-host, or
+		// self-issued) so the client verifies against the URL form it already uses
+		verifyUrl: new URL(
+			new URL(request.url).pathname.replace(batchPathSuffixRegex, '/objects/verify'),
+			request.url,
+		).href,
 	}
 
 	const response: GitLfsBatchResponse = {
@@ -485,9 +523,11 @@ async function authorizeRequest(
 		push: repoResult.repoInfo.permissions?.push ?? false,
 	}
 
-	// The numeric GitHub repo ID is used as the storage prefix to prevent
-	// side-channel attacks while remaining robust to repo name changes
-	const storagePrefix = String(repoResult.repoInfo.id)
+	// The numeric GitHub repo ID keys the storage prefix to prevent side-channel
+	// attacks while remaining robust to repo name changes — GitHub's rename
+	// redirects preserve authorization continuity, but only the immutable,
+	// never-reused ID preserves addressing continuity
+	const storagePrefix = `${githubStoragePrefix}/${repoResult.repoInfo.id}`
 	setCachedAuthorization(cacheKey, { permissions, storagePrefix })
 
 	if (!hasOperationPermission(permissions, operation)) {
@@ -537,7 +577,7 @@ async function authorizeAnonymousDownload(
 		}
 	}
 
-	const storagePrefix = String(repoResult.repoInfo.id)
+	const storagePrefix = `${githubStoragePrefix}/${repoResult.repoInfo.id}`
 	setCachedAuthorization(cacheKey, { permissions: { pull: true, push: false }, storagePrefix })
 	return { storagePrefix }
 }
@@ -628,7 +668,7 @@ async function authorizeGitHubActionsToken(
 		}
 	}
 
-	return { storagePrefix: String(repoId) }
+	return { storagePrefix: `${githubStoragePrefix}/${repoId}` }
 }
 
 async function authorizeSelfIssuedToken(
@@ -722,7 +762,7 @@ async function authorizeSelfIssuedToken(
 			}
 		}
 
-		return { storagePrefix: String(grant.github_repo_id) }
+		return { storagePrefix: `${githubStoragePrefix}/${grant.github_repo_id}` }
 	}
 
 	const claimsResult = selfIssuedTokenClaimsSchema.safeParse(payload)
@@ -757,10 +797,9 @@ async function authorizeSelfIssuedToken(
 		}
 	}
 
-	// Namespaced under "self/" so admin-chosen repo names can never collide
-	// with the purely numeric GitHub prefixes (a repo named "12345" must not
-	// alias GitHub repo ID 12345). Renaming a repo moves its prefix, so
-	// objects must be copied or re-uploaded after a rename.
+	// The "self/" namespace keeps admin-chosen repo names disjoint from every
+	// provider namespace (github.com/…, and any future forge). Renaming a repo
+	// moves its prefix, so objects must be copied or re-uploaded after a rename.
 	return { storagePrefix: `self/${claims.repo.toLowerCase()}` }
 }
 
@@ -875,12 +914,6 @@ function createR2Clients(env: Env): { readOnlyClient: AwsClient; readWriteClient
 			secretAccessKey: env.R2_S3_READ_WRITE_SECRET_KEY,
 		}),
 	}
-}
-
-function getRepoUrlPath(address: RepoAddress): string {
-	return address.type === 'github'
-		? `/${encodeURIComponent(address.owner)}/${encodeURIComponent(address.repo)}`
-		: `/${encodeURIComponent(address.name)}`
 }
 
 function getObjectUrl(env: Env, storagePrefix: string, oid: string): string {

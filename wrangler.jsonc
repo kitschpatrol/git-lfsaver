@@ -28,7 +28,7 @@
 	"vars": {
 		/* Comma-separated GitHub owners (users or orgs) whose repos may use this
 		 * server. Empty rejects everyone. Not consulted for self-issued repos. */
-		"ALLOWED_OWNERS": "kitschpatrol",
+		"GITHUB_ALLOWED_OWNERS": "kitschpatrol",
 		/* Some clients might not set headers correctly... */
 		"ENFORCE_MIME": true,
 		/* Pre-signed URL expiry in seconds */
