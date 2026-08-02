@@ -114,10 +114,21 @@ afterAll(() => {
 	vi.unstubAllGlobals()
 })
 
-function mockGitHubRepo(permissions?: { pull: boolean; push: boolean }): void {
+function mockGitHubRepo(
+	permissions?: { pull: boolean; push: boolean },
+	// The owner GitHub resolves after following redirects, which may differ
+	// from the owner in the request path after a rename or transfer
+	owner = 'kitschpatrol',
+): void {
 	pendingMocks.push({
 		method: 'GET',
-		response: () => Response.json({ id: repoId, permissions }),
+		response: () =>
+			Response.json({
+				full_name: `${owner}/repo`,
+				id: repoId,
+				owner: { login: owner },
+				permissions,
+			}),
 		url: 'https://api.github.com/repos/kitschpatrol/repo',
 	})
 }
@@ -288,6 +299,16 @@ describe('permission matrix', () => {
 		mockGitHubError(404)
 		const response = await postBatch('download', [{ oid: oidA, size: 8 }])
 		expect(response.status).toBe(404)
+	})
+})
+
+describe('resolved owner allowlist', () => {
+	it('rejects a repo transferred out of the allowlist despite the redirect', async () => {
+		// The path's owner passes the allowlist, but GitHub's redirect resolves
+		// to an owner that doesn't — the transferred repo must not retain access
+		mockGitHubRepo({ pull: true, push: true }, 'new-owner')
+		const response = await postBatch('download', [{ oid: oidA, size: 8 }])
+		expect(response.status).toBe(403)
 	})
 })
 
@@ -777,10 +798,11 @@ describe('anonymous public repo downloads', () => {
 	// Each test uses a distinct repo name: the anonymous authorization cache is
 	// keyed by repo (not credential), so reuse would couple tests
 
-	function mockPublicRepo(repoName: string, id: number): void {
+	function mockPublicRepo(repoName: string, id: number, owner = 'kitschpatrol'): void {
 		pendingMocks.push({
 			method: 'GET',
-			response: () => Response.json({ id }),
+			response: () =>
+				Response.json({ full_name: `${owner}/${repoName}`, id, owner: { login: owner } }),
 			url: `https://api.github.com/repos/kitschpatrol/${repoName}`,
 		})
 	}
@@ -848,6 +870,12 @@ describe('anonymous public repo downloads', () => {
 		const response = await postAnonymous('anon-limited', 'download')
 		expect(response.status).toBe(401)
 		expect(response.headers.get('LFS-Authenticate')).toBe('Basic realm="Git LFS"')
+	})
+
+	it('rejects anonymous downloads from a repo transferred out of the allowlist', async () => {
+		mockPublicRepo('anon-transferred', 333, 'new-owner')
+		const response = await postAnonymous('anon-transferred', 'download')
+		expect(response.status).toBe(403)
 	})
 
 	it('rejects anonymous uploads', async () => {

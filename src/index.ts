@@ -455,7 +455,7 @@ async function authorizeRequest(
 		// Public GitHub repos allow anonymous downloads, mirroring GitHub's own
 		// LFS behavior; everything else requires a credential
 		if (operation === 'download' && address.type === 'github') {
-			return authorizeAnonymousDownload(address.owner, address.repo, requestId)
+			return authorizeAnonymousDownload(address.owner, address.repo, env, requestId)
 		}
 
 		return {
@@ -532,6 +532,11 @@ async function authorizeRequest(
 		}
 	}
 
+	const ownerResponse = resolvedOwnerForbiddenResponse(repoResult.repoInfo, env, requestId)
+	if (ownerResponse !== undefined) {
+		return { errorResponse: ownerResponse }
+	}
+
 	const permissions = {
 		pull: repoResult.repoInfo.permissions?.pull ?? false,
 		push: repoResult.repoInfo.permissions?.push ?? false,
@@ -551,9 +556,35 @@ async function authorizeRequest(
 	return { storagePrefix }
 }
 
+/**
+ * GitHub follows rename and transfer redirects, so the URL's owner (already
+ * allowlist-checked before lookup) may not be the repo's current owner.
+ * Re-checking the resolved owner keeps redirects working for renames and
+ * transfers within the allowlist, but stops a repo transferred out of it from
+ * using this server through its old URL — otherwise the new owner would retain
+ * indefinite access to the bucket.
+ */
+function resolvedOwnerForbiddenResponse(
+	repoInfo: GitHubRepoInfo,
+	env: Env,
+	requestId: string,
+): Response | undefined {
+	const resolvedOwner = repoInfo.owner.login
+	if (isOwnerAllowed(resolvedOwner, env.GITHUB_ALLOWED_OWNERS)) {
+		return undefined
+	}
+
+	return lfsErrorResponse(
+		`Repository "${repoInfo.full_name}" is owned by "${resolvedOwner}", which is not allowed to use this LFS server.`,
+		requestId,
+		403,
+	)
+}
+
 async function authorizeAnonymousDownload(
 	owner: string,
 	repo: string,
+	env: Env,
 	requestId: string,
 ): Promise<AuthorizationResult> {
 	// An unauthenticated GitHub API hit can only ever see public repos, so a
@@ -589,6 +620,11 @@ async function authorizeAnonymousDownload(
 				unauthorizedHeaders,
 			),
 		}
+	}
+
+	const ownerResponse = resolvedOwnerForbiddenResponse(repoResult.repoInfo, env, requestId)
+	if (ownerResponse !== undefined) {
+		return { errorResponse: ownerResponse }
 	}
 
 	const storagePrefix = `${githubStoragePrefix}/${repoResult.repoInfo.id}`
