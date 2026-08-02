@@ -114,7 +114,7 @@ Do this once on your dev machine:
 
    Pulling your GitHub token from the `gh` CLI tool is recommended as the easiest "set and forget" credential configuration, but there are [other ways to authenticate](#authentication-strategies).
 
-   Nothing is stored for the LFS host itself: Git runs this helper each time the server asks for credentials (typically once per pull or push), fetching the token from `gh` on demand. The token lives wherever `gh` already keeps your login — the system keychain on macOS — so rotating or revoking it through `gh auth` takes effect immediately. You can also set this config locally per-repo if you prefer.
+   Nothing is stored for the LFS host itself: Git runs this helper each time the server asks for credentials (typically once per pull or push), fetching the token from `gh` on demand. The token lives wherever `gh` already keeps your login — the system keychain on macOS — so rotating or revoking it through `gh auth` requires no reconfiguration here. You can also set this config locally per-repo if you prefer.
 
 ### Git repository setup
 
@@ -132,7 +132,7 @@ These steps assume the repo is hosted on GitHub and has a GitHub remote configur
 
    ```ini
    [lfs]
-   	url = https://lfs.example.com/<repo-owner>/<repo-name>
+     url = https://lfs.example.com/<repo-owner>/<repo-name>
    ```
 
    No `locksverify` setting is needed — the server signals that locking is unsupported and clients disable it automatically.
@@ -179,7 +179,7 @@ The worker accepts four kinds of credential, all sent through Git's standard Bas
 
 ### GitHub `gh` token
 
-The recommended strategy for people working on GitHub-hosted repos. The credential helper from [Global Git setup](#global-git-setup) forwards your existing [GitHub CLI](https://cli.github.com/) login on demand — nothing new to create, store, or rotate, and revoking the login through `gh auth` takes effect immediately. Download and upload permission mirror your pull and push permission on the GitHub repository named in the URL. One caveat: the `gh` OAuth token is scope-based, so it carries access to _all_ your repositories — it can't be narrowed to just one. If that bothers you, use a fine-grained access token instead.
+The recommended strategy for people working on GitHub-hosted repos. The credential helper from [Global Git setup](#global-git-setup) forwards your existing [GitHub CLI](https://cli.github.com/) login on demand — nothing new to create, store, or rotate. Revoking the login through `gh auth` cuts off new transfers within the worker's five-minute authorization cache, though transfer URLs issued before revocation stay valid until they expire (`EXPIRY`, one hour by default). Download and upload permission mirror your pull and push permission on the GitHub repository named in the URL. One caveat: the `gh` OAuth token is scope-based, so it carries access to _all_ your repositories — it can't be narrowed to just one. If that bothers you, use a fine-grained access token instead.
 
 ### GitHub access tokens
 
@@ -297,7 +297,7 @@ Private repos are the primary use case: the worker mirrors your GitHub permissio
 
 ### What if my repo is public?
 
-Anonymous downloads just work, mirroring GitHub's own LFS behavior: the worker confirms the repo is public via an unauthenticated GitHub API lookup (which by construction can't see private repos), then serves download URLs with no credential required — so `git clone` works for anyone. Uploads always require a credential with push permission. Two caveats: a repo flipped from public to private stays anonymously downloadable for up to the five-minute authorization cache, and if the unauthenticated GitHub API rate limit is hit the server falls back to prompting for credentials, where any GitHub account works.
+Anonymous downloads just work, mirroring GitHub's own LFS behavior: the worker confirms the repo is public via an unauthenticated GitHub API lookup (which by construction can't see private repos), then serves download URLs with no credential required — so `git clone` works for anyone. Uploads always require a credential with push permission. Two caveats: a repo flipped from public to private stays anonymously downloadable for up to the five-minute authorization cache — plus the lifetime of any download URLs issued during it (`EXPIRY`, one hour by default) — and if the unauthenticated GitHub API rate limit is hit the server falls back to prompting for credentials, where any GitHub account works.
 
 ### Why not use GitHub's built-in LFS support?
 
