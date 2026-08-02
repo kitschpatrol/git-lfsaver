@@ -31,8 +31,11 @@
 		"GITHUB_ALLOWED_OWNERS": "kitschpatrol",
 		/* Some clients might not set headers correctly... */
 		"ENFORCE_MIME": true,
-		/* Pre-signed URL expiry in seconds */
-		"EXPIRY": 3600,
+		/* Pre-signed URL expiry in seconds. Expiry gates when a transfer may
+		 * start, not how long it may run, and git-lfs re-requests a batch when
+		 * an action expires — so this only needs to cover the client's transfer
+		 * queue wait, and shorter is safer (issued URLs outlive revocation). */
+		"EXPIRY": 900,
 		/* Maximum file size in bytes, storage-dependent
 		 * See https://developers.cloudflare.com/r2/platform/limits/
 		 */
