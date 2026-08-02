@@ -3,7 +3,7 @@
 /**
  * Storage audit for the LFS bucket: lists every top-level prefix with its
  * object count, total size, and the repository it belongs to, flagging orphaned
- * prefixes whose GitHub repository no longer exists.
+ * prefixes whose GitHub repository can no longer be found.
  *
  * Usage:
  *
@@ -185,11 +185,12 @@ async function resolveGitHubRepo(
 
 	const response = await fetch(`https://api.github.com/repositories/${id}`, { headers })
 	if (response.status === 404) {
-		// Without a credential, private repositories also 404 — don't report
-		// them as deletable
+		// A 404 is ambiguous: without a credential every private repo 404s, and
+		// even with one, private repos the token can't see (e.g. outside a
+		// fine-grained token's grant) 404 exactly like deleted repos do
 		return token === undefined
 			? { repo: '(unverified)', status: 'unverified' }
-			: { repo: '(deleted repo)', status: 'orphaned' }
+			: { repo: '(deleted or inaccessible)', status: 'orphaned' }
 	}
 
 	if (!response.ok) {
@@ -309,5 +310,11 @@ if (objects.length === 0) {
 		console.log(JSON.stringify({ prefixes: reports, totals }, undefined, 2))
 	} else {
 		printTable(reports, totals)
+
+		if (reports.some((report) => report.status === 'orphaned')) {
+			console.error(
+				'\nNote: "orphaned" means this credential cannot see the repository — it may be deleted, or the token may lack access to it. Verify before deleting objects.',
+			)
+		}
 	}
 }
