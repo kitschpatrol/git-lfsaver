@@ -894,6 +894,18 @@ describe('anonymous public repo downloads', () => {
 	})
 })
 
+describe('request body limit', () => {
+	it('rejects oversized request bodies with 413 before parsing or auth', async () => {
+		// No GitHub or R2 mocks: the body is refused before any outbound call
+		const response = await post('/kitschpatrol/repo/objects/batch', {
+			objects: [{ oid: oidA, size: 8 }],
+			operation: 'download',
+			padding: 'x'.repeat(300_000),
+		})
+		expect(response.status).toBe(413)
+	})
+})
+
 describe('path parsing', () => {
 	it('rejects malformed percent-encoding with 422 instead of crashing', async () => {
 		const response = await post('/kitschpatrol/repo%zz/objects/batch', {

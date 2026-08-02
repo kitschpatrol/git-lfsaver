@@ -84,6 +84,12 @@ const batchPathSuffixRegex = /\/objects\/batch$/v
 // `self/<name>/…`) so future forges can never collide with existing prefixes
 const githubStoragePrefix = 'github.com'
 
+// The batch spec caps requests at 100 objects (a few tens of KiB of JSON), so
+// this generous limit only blocks abuse: Workers accept request bodies up to
+// 100 MB, and the body is read before authorization because the operation
+// claim inside it selects the auth policy
+const maxRequestBodyBytes = 256 * 1024
+
 type CachedAuthorization = {
 	expiresAt: number
 	permissions: { pull: boolean; push: boolean }
@@ -321,6 +327,52 @@ function getInvalidMimeResponse(
 	return undefined
 }
 
+/**
+ * Reads and parses a JSON request body, enforcing {@link maxRequestBodyBytes} by
+ * streaming rather than trusting the Content-Length header (chunked requests
+ * can omit it). Bounds the memory an unauthenticated request can consume, since
+ * bodies are read before authorization.
+ */
+async function readJsonBody(
+	request: Request,
+	requestId: string,
+): Promise<{ errorResponse: Response } | { raw: unknown }> {
+	if (request.body === null) {
+		return { errorResponse: lfsErrorResponse('Request body is not valid JSON.', requestId, 422) }
+	}
+
+	const chunks: Uint8Array[] = []
+	let total = 0
+	for await (const chunk of request.body) {
+		total += chunk.byteLength
+		if (total > maxRequestBodyBytes) {
+			// Breaking out of iteration cancels the underlying stream
+			return {
+				errorResponse: lfsErrorResponse(
+					`Request body exceeds the maximum allowed size of ${maxRequestBodyBytes} bytes.`,
+					requestId,
+					413,
+				),
+			}
+		}
+
+		chunks.push(chunk)
+	}
+
+	const bytes = new Uint8Array(total)
+	let offset = 0
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset)
+		offset += chunk.byteLength
+	}
+
+	try {
+		return { raw: JSON.parse(new TextDecoder().decode(bytes)) as unknown }
+	} catch {
+		return { errorResponse: lfsErrorResponse('Request body is not valid JSON.', requestId, 422) }
+	}
+}
+
 async function handleBatch(
 	request: Request,
 	env: Env,
@@ -328,14 +380,12 @@ async function handleBatch(
 	requestId: string,
 ): Promise<Response> {
 	// Read and validate the request
-	let rawClientRequest: unknown
-	try {
-		rawClientRequest = await request.json()
-	} catch {
-		return lfsErrorResponse('Request body is not valid JSON.', requestId, 422)
+	const bodyResult = await readJsonBody(request, requestId)
+	if ('errorResponse' in bodyResult) {
+		return bodyResult.errorResponse
 	}
 
-	const result = gitLfsBatchRequestSchema.safeParse(rawClientRequest)
+	const result = gitLfsBatchRequestSchema.safeParse(bodyResult.raw)
 	if (!result.success) {
 		return lfsErrorResponse(z.prettifyError(result.error), requestId, 422)
 	}
@@ -392,14 +442,12 @@ async function handleVerify(
 	requestId: string,
 ): Promise<Response> {
 	// Read and validate the request
-	let rawClientRequest: unknown
-	try {
-		rawClientRequest = await request.json()
-	} catch {
-		return lfsErrorResponse('Request body is not valid JSON.', requestId, 422)
+	const bodyResult = await readJsonBody(request, requestId)
+	if ('errorResponse' in bodyResult) {
+		return bodyResult.errorResponse
 	}
 
-	const result = gitLfsVerifyRequestSchema.safeParse(rawClientRequest)
+	const result = gitLfsVerifyRequestSchema.safeParse(bodyResult.raw)
 	if (!result.success) {
 		return lfsErrorResponse(z.prettifyError(result.error), requestId, 422)
 	}
