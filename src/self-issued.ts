@@ -42,10 +42,11 @@ export const selfIssuedTokenClaimsSchema = z.object({
 })
 
 /**
- * Claims for an explicit grant to a GitHub-backed repository, minted with
- * `--github-repo-id` for collaborators without GitHub accounts. The numeric ID
- * pins the token to the same storage prefix the GitHub credential paths use,
- * and the `repo` claim must match the owner-qualified request URL.
+ * Claims for an explicit grant to a GitHub-backed repository, minted by passing
+ * an owner-qualified `--repo <owner>/<name>` for collaborators without GitHub
+ * accounts. The numeric ID is resolved from the GitHub API at mint time and
+ * pins the token to the same storage prefix the GitHub credential paths use;
+ * the `repo` claim must match the owner-qualified request URL.
  */
 export const selfIssuedGitHubGrantClaimsSchema = z.object({
 	// eslint-disable-next-line ts/naming-convention -- JWT claim names are snake_case
