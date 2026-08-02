@@ -1,102 +1,84 @@
-# On-demand check of the PAT auth path against the deployed LFS server: a
-# GitHub personal access token sent as the Basic auth password must be able
-# to request downloads and uploads for this repository. Uses the same
-# PERSONAL_ACCESS_TOKEN secret as this repo's other workflows.
-#
-# Asserts three things without transferring any objects:
-#   1. Requests without credentials are rejected (401)
-#   2. The PAT can request downloads (200, with an object-level 404 for an
-#      OID that isn't in the bucket)
-#   3. The PAT can request uploads (200, with an object-level 413 for an
-#      oversized object — authorization passes but no signed upload URL is
-#      ever issued, so none can leak into these public logs)
-
-name: Test LFS PAT auth
+name: Checkout With LFS (PAT)
 
 on:
-  workflow_dispatch:
-    inputs:
-      lfs-host:
-        description: Hostname of the deployed LFS server
-        required: true
-        default: lfs.kitschpatrol.com
+  push: {}
+  workflow_dispatch: {}
 
-permissions: {}
-
-env:
-  MIME: application/vnd.git-lfs+json
-  # Well-formed SHA-256 OID that no real content hashes to
-  MISSING_OID: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
-  # Larger than the worker's MAX_FILE_SIZE, so upload requests are authorized
-  # but refused per-object before a URL is signed
-  OVERSIZED_BYTES: '9999999999999'
-
-defaults:
-  run:
-    shell: bash
+permissions:
+  contents: read
 
 jobs:
-  test-pat-auth:
+  lfs-check:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
     env:
-      BATCH_URL: https://${{ inputs.lfs-host }}/${{ github.repository }}/objects/batch
+      # Pinned in the workflow rather than derived from the checked-out
+      # .lfsconfig: on an untrusted ref a tampered .lfsconfig could otherwise
+      # redirect the credential to an attacker's host. (The OIDC sample skips
+      # this — its tokens are audience-bound and useless on any other host.)
+      LFS_HOST: lfs.example.com
     steps:
-      - name: Reject unauthenticated requests
-        run: |
-          set -euo pipefail
-          status=$(curl -sS -o response.json -w '%{http_code}' \
-            -X POST "$BATCH_URL" \
-            -H "Accept: $MIME" -H "Content-Type: $MIME" \
-            -d "{\"operation\":\"download\",\"objects\":[{\"oid\":\"$MISSING_OID\",\"size\":123}]}")
-          cat response.json
-          if [ "$status" != "401" ]; then
-            echo "::error::Expected 401 without credentials, got $status"
-            exit 1
-          fi
+      # Deliberately not using `lfs: true`: checkout fetches LFS objects before
+      # the working tree exists, so .lfsconfig (which points at the custom LFS
+      # server) is never read and the fetch 404s against github.com's endpoint.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Request download with PAT
+      # The credential helper references $LFS_TOKEN rather than embedding the
+      # token, and is passed per-invocation via `git -c`, so the token never
+      # lands in .git/config and is gone when this step ends.
+      - name: Pull LFS objects
         env:
-          PAT: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          LFS_TOKEN: ${{ secrets.LFS_PAT }}
         run: |
           set -euo pipefail
-          if [ -z "$PAT" ]; then
-            echo "::error::The PERSONAL_ACCESS_TOKEN secret is not set on this repository."
+          if [[ -z "$LFS_TOKEN" ]]; then
+            echo "::error::The LFS_PAT secret is not set on this repository."
             exit 1
           fi
-          status=$(curl -sS -o response.json -w '%{http_code}' \
-            -u "pat:$PAT" \
-            -X POST "$BATCH_URL" \
-            -H "Accept: $MIME" -H "Content-Type: $MIME" \
-            -d "{\"operation\":\"download\",\"objects\":[{\"oid\":\"$MISSING_OID\",\"size\":123}]}")
-          jq 'del(.objects[]?.actions)' response.json || cat response.json
-          if [ "$status" != "200" ]; then
-            echo "::error::Expected 200 for an authenticated download batch, got $status"
+          LFS_URL=$(git config --file .lfsconfig lfs.url)
+          CONFIG_HOST=${LFS_URL#*://}
+          CONFIG_HOST=${CONFIG_HOST%%/*}
+          if [[ "$CONFIG_HOST" != "$LFS_HOST" ]]; then
+            echo "::error::.lfsconfig points at \"$CONFIG_HOST\" but this workflow pins \"$LFS_HOST\" — refusing to send the PAT to an unexpected host"
             exit 1
           fi
-          if ! jq -e '.objects[0].error.code == 404' response.json > /dev/null; then
-            echo "::error::Expected an object-level 404 for a nonexistent OID"
-            exit 1
-          fi
+          export LFS_TOKEN
+          git -c "credential.https://$LFS_HOST.helper=!f() { echo username=pat; echo password=\$LFS_TOKEN; };f" \
+            lfs pull
 
-      - name: Request upload with PAT
-        env:
-          PAT: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+      - name: List LFS files and verify downloads
         run: |
           set -euo pipefail
-          status=$(curl -sS -o response.json -w '%{http_code}' \
-            -u "pat:$PAT" \
-            -X POST "$BATCH_URL" \
-            -H "Accept: $MIME" -H "Content-Type: $MIME" \
-            -d "{\"operation\":\"upload\",\"objects\":[{\"oid\":\"$MISSING_OID\",\"size\":$OVERSIZED_BYTES}]}")
-          jq 'del(.objects[]?.actions)' response.json || cat response.json
-          if [ "$status" != "200" ]; then
-            echo "::error::Expected 200 for an authenticated upload batch (403 means the PAT lacks push permission), got $status"
-            exit 1
-          fi
-          if ! jq -e '.objects[0].error.code == 413' response.json > /dev/null; then
-            echo "::error::Expected an object-level 413 for an oversized object"
-            exit 1
-          fi
 
-          echo "PAT auth works: download and upload both authorized." >> "$GITHUB_STEP_SUMMARY"
+          git lfs env
+          echo
+          git lfs ls-files --long --size
+          echo
+
+          {
+            echo "| File | Size (bytes) | Status |"
+            echo "| --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          fail=0
+          while read -r oid _marker path; do
+            if [[ ! -f "$path" ]]; then
+              echo "MISSING  $path"
+              echo "| \`$path\` | - | missing |" >> "$GITHUB_STEP_SUMMARY"
+              fail=1
+              continue
+            fi
+            size=$(stat -c%s "$path")
+            actual_oid=$(sha256sum "$path" | cut -d' ' -f1)
+            if [[ "$actual_oid" == "$oid" ]]; then
+              echo "OK       $path ($size bytes)"
+              echo "| \`$path\` | $size | downloaded |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "FAIL     $path ($size bytes) — working-tree content does not match the LFS OID (pointer stub?)"
+              echo "| \`$path\` | $size | NOT downloaded |" >> "$GITHUB_STEP_SUMMARY"
+              fail=1
+            fi
+          done < <(git lfs ls-files --long)
+
+          exit "$fail"
