@@ -3,11 +3,12 @@
 # to request downloads and uploads for this repository. Uses the same
 # PERSONAL_ACCESS_TOKEN secret as this repo's other workflows.
 #
-# Asserts three things without transferring any objects:
-#   1. Requests without credentials are rejected (401)
-#   2. The PAT can request downloads (200, with an object-level 404 for an
-#      OID that isn't in the bucket)
-#   3. The PAT can request uploads (200, with an object-level 413 for an
+# Asserts four things without transferring any objects:
+#   1. Upload requests without credentials are rejected (401)
+#   2. Anonymous downloads work for this public repo (200, with an
+#      object-level 404 for an OID that isn't in the bucket)
+#   3. The PAT can request downloads (200, with an object-level 404)
+#   4. The PAT can request uploads (200, with an object-level 413 for an
 #      oversized object — authorization passes but no signed upload URL is
 #      ever issued, so none can leak into these public logs)
 
@@ -42,16 +43,33 @@ jobs:
     env:
       BATCH_URL: https://${{ inputs.lfs-host }}/${{ github.repository }}/objects/batch
     steps:
-      - name: Reject unauthenticated requests
+      - name: Reject unauthenticated uploads
+        run: |
+          set -euo pipefail
+          status=$(curl -sS -o response.json -w '%{http_code}' \
+            -X POST "$BATCH_URL" \
+            -H "Accept: $MIME" -H "Content-Type: $MIME" \
+            -d "{\"operation\":\"upload\",\"objects\":[{\"oid\":\"$MISSING_OID\",\"size\":123}]}")
+          cat response.json
+          if [ "$status" != "401" ]; then
+            echo "::error::Expected 401 for an unauthenticated upload, got $status"
+            exit 1
+          fi
+
+      - name: Allow anonymous downloads from this public repo
         run: |
           set -euo pipefail
           status=$(curl -sS -o response.json -w '%{http_code}' \
             -X POST "$BATCH_URL" \
             -H "Accept: $MIME" -H "Content-Type: $MIME" \
             -d "{\"operation\":\"download\",\"objects\":[{\"oid\":\"$MISSING_OID\",\"size\":123}]}")
-          cat response.json
-          if [ "$status" != "401" ]; then
-            echo "::error::Expected 401 without credentials, got $status"
+          jq 'del(.objects[]?.actions)' response.json || cat response.json
+          if [ "$status" != "200" ]; then
+            echo "::error::Expected 200 for an anonymous download batch from a public repo, got $status"
+            exit 1
+          fi
+          if ! jq -e '.objects[0].error.code == 404' response.json > /dev/null; then
+            echo "::error::Expected an object-level 404 for a nonexistent OID"
             exit 1
           fi
 
