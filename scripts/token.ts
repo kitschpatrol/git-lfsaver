@@ -6,12 +6,17 @@
  * ```sh
  * pnpm run token generate-key
  * pnpm run token mint --repo <repo-name> --host lfs.example.com [--pull] [--push] [--expiry 90d] [--subject <label>]
- * pnpm run token mint --repo <owner>/<name> --github-repo-id <id> --host lfs.example.com [--pull] [--push] [--expiry 90d] [--subject <label>]
+ * pnpm run token mint --repo <owner>/<name> --host lfs.example.com [--pull] [--push] [--expiry 90d] [--subject <label>]
  * ```
  *
- * The second mint form is an explicit grant to a GitHub-backed repository (for
- * collaborators without GitHub accounts): the numeric ID pins the token to the
- * repo's storage prefix and bypasses GitHub's permission model entirely.
+ * The repo shape selects the token type, mirroring the server's URL routing: a
+ * single-segment name mints a token for a self-issued (non-GitHub) repo, while
+ * an owner-qualified `<owner>/<name>` path mints an explicit grant to a
+ * GitHub-backed repository (for collaborators without GitHub accounts). For
+ * grants, the repo's immutable numeric ID is resolved from the GitHub API at
+ * mint time — authenticated with `GITHUB_TOKEN` or the `gh` CLI login when
+ * available, which private repositories require — and pins the token to the
+ * repo's storage prefix, bypassing GitHub's permission model entirely.
  *
  * The private key stays in `token-signing-key.json` (gitignored); the printed
  * public key goes in the `SELF_ISSUED_TOKEN_PUBLIC_KEY` variable in
@@ -20,9 +25,11 @@
  */
 
 import { exportJWK, generateKeyPair, importJWK, SignJWT } from 'jose'
+import { execFileSync } from 'node:child_process'
 import { readFile, writeFile } from 'node:fs/promises'
 import process from 'node:process'
 import { parseArgs } from 'node:util'
+import { z } from 'zod'
 import {
 	isValidGitHubRepoPath,
 	isValidRepoName,
@@ -31,10 +38,78 @@ import {
 
 const keyFile = 'token-signing-key.json'
 
+const gitHubRepoSchema = z.object({
+	// eslint-disable-next-line ts/naming-convention -- GitHub API field names are snake_case
+	full_name: z.string(),
+	id: z.number().int().positive(),
+})
+
 function fail(message: string): never {
 	console.error(`Error: ${message}`)
 	// eslint-disable-next-line unicorn/no-process-exit -- This is a CLI script
 	process.exit(1)
+}
+
+function getGitHubToken(): string | undefined {
+	const environmentToken = process.env.GITHUB_TOKEN
+	if (environmentToken !== undefined && environmentToken.length > 0) {
+		return environmentToken
+	}
+
+	try {
+		const token = execFileSync('gh', ['auth', 'token'], {
+			encoding: 'utf8',
+			stdio: ['ignore', 'pipe', 'ignore'],
+		}).trim()
+		return token.length > 0 ? token : undefined
+	} catch {
+		return undefined
+	}
+}
+
+/**
+ * Resolves a GitHub repository path to its immutable numeric ID and canonical
+ * name at mint time, so the operator never hand-copies the ID (a transposition
+ * there would silently grant a different repo's storage).
+ */
+async function resolveGitHubRepo(repoPath: string): Promise<{ fullName: string; id: number }> {
+	const token = getGitHubToken()
+	const headers: Record<string, string> = {
+		// eslint-disable-next-line ts/naming-convention -- HTTP header name
+		Accept: 'application/vnd.github+json',
+		'User-Agent': 'git-lfs-cf-token-mint',
+	}
+	if (token !== undefined) {
+		headers.Authorization = `Bearer ${token}`
+	}
+
+	let response: Response
+	try {
+		response = await fetch(`https://api.github.com/repos/${repoPath}`, { headers })
+	} catch {
+		fail(`Could not reach the GitHub API to resolve "${repoPath}". Check your network connection.`)
+	}
+
+	if (response.status === 404) {
+		fail(
+			`No GitHub repository found for "${repoPath}".${
+				token === undefined
+					? ' Private repositories require a credential: run `gh auth login` or set GITHUB_TOKEN.'
+					: ''
+			}`,
+		)
+	}
+
+	if (!response.ok) {
+		fail(`GitHub API request for "${repoPath}" failed with HTTP ${response.status}.`)
+	}
+
+	const parsed = gitHubRepoSchema.safeParse(await response.json())
+	if (!parsed.success) {
+		fail(`GitHub API returned an unexpected response for "${repoPath}".`)
+	}
+
+	return { fullName: parsed.data.full_name, id: parsed.data.id }
 }
 
 async function generateKey(): Promise<void> {
@@ -72,7 +147,6 @@ async function mint(mintArguments: string[]): Promise<void> {
 		args: mintArguments,
 		options: {
 			expiry: { default: '90d', type: 'string' },
-			'github-repo-id': { type: 'string' },
 			host: { type: 'string' },
 			pull: { default: false, type: 'boolean' },
 			push: { default: false, type: 'boolean' },
@@ -82,25 +156,27 @@ async function mint(mintArguments: string[]): Promise<void> {
 	})
 
 	const { expiry, host, pull, push, repo, subject } = values
-	const rawGitHubRepoId = values['github-repo-id']
-	let githubRepoId: number | undefined
-	if (rawGitHubRepoId === undefined) {
-		if (repo === undefined || !isValidRepoName(repo)) {
-			fail(
-				'Pass --repo as a single-segment repository name (no owner, no slashes) using letters, numbers, ".", "_", or "-". It must match the name in the lfs.url path.',
-			)
-		}
-	} else {
-		githubRepoId = Number(rawGitHubRepoId)
-		if (!Number.isInteger(githubRepoId) || githubRepoId <= 0) {
-			fail(
-				'Pass --github-repo-id as the numeric GitHub repository ID, e.g. from `gh api repos/<owner>/<name> --jq .id`.',
-			)
-		}
 
-		if (repo === undefined || !isValidGitHubRepoPath(repo)) {
-			fail('With --github-repo-id, pass --repo as the "<owner>/<name>" GitHub repository path.')
+	if (repo === undefined) {
+		fail(
+			'Pass --repo as a single-segment repository name (self-issued repos) or an "<owner>/<name>" GitHub repository path (explicit grant).',
+		)
+	}
+
+	// The repo shape selects the token type, exactly like the server's URL
+	// routing: owner-qualified paths are explicit grants to GitHub-backed
+	// repos, single-segment names are self-issued repos
+	const isGitHubGrant = repo.includes('/')
+	if (isGitHubGrant) {
+		if (!isValidGitHubRepoPath(repo)) {
+			fail(
+				'Pass --repo as the "<owner>/<name>" GitHub repository path, with each segment using letters, numbers, ".", "_", or "-".',
+			)
 		}
+	} else if (!isValidRepoName(repo)) {
+		fail(
+			'Pass --repo as a single-segment repository name (no owner) using letters, numbers, ".", "_", or "-". It must match the name in the lfs.url path.',
+		)
 	}
 
 	if (host === undefined || host.length === 0) {
@@ -122,9 +198,25 @@ async function mint(mintArguments: string[]): Promise<void> {
 
 	const privateKey = await importJWK(privateJwk as Parameters<typeof importJWK>[0], 'EdDSA')
 
+	// Grants embed the canonical name GitHub resolves, so a token minted
+	// against a stale (renamed) path still matches the URL collaborators use
+	let repoClaim = repo
+	let githubRepoId: number | undefined
+	if (isGitHubGrant) {
+		const resolved = await resolveGitHubRepo(repo)
+		githubRepoId = resolved.id
+		if (resolved.fullName.toLowerCase() !== repo.toLowerCase()) {
+			console.error(
+				`Note: GitHub resolves "${repo}" to "${resolved.fullName}" (renamed or transferred) — minting for "${resolved.fullName}".`,
+			)
+		}
+
+		repoClaim = resolved.fullName
+	}
+
 	// eslint-disable-next-line ts/naming-convention -- JWT claim names are snake_case
 	const grantClaims = githubRepoId === undefined ? {} : { github_repo_id: githubRepoId }
-	let jwt = new SignJWT({ ...grantClaims, pull, push, repo })
+	let jwt = new SignJWT({ ...grantClaims, pull, push, repo: repoClaim })
 		.setProtectedHeader({ alg: 'EdDSA' })
 		.setIssuer(selfIssuedTokenIssuer)
 		.setAudience(host)
@@ -140,7 +232,7 @@ async function mint(mintArguments: string[]): Promise<void> {
 	console.log(token)
 	console.error('')
 	console.error(
-		`Grants ${[pull && 'download', push && 'upload'].filter(Boolean).join(' and ')} for "${repo}" on "${host}", expires in ${expiry}.`,
+		`Grants ${[pull && 'download', push && 'upload'].filter(Boolean).join(' and ')} for "${repoClaim}" on "${host}", expires in ${expiry}.`,
 	)
 	if (githubRepoId !== undefined) {
 		console.error(
@@ -161,6 +253,6 @@ if (command === 'generate-key') {
 	await mint(rest)
 } else {
 	fail(
-		'Usage: `pnpm run token generate-key` or `pnpm run token mint --repo <repo-name> --host <lfs-hostname> [--pull] [--push] [--expiry 90d] [--subject <label>] [--github-repo-id <id>]`',
+		'Usage: `pnpm run token generate-key` or `pnpm run token mint --repo <repo-name-or-owner/name> --host <lfs-hostname> [--pull] [--push] [--expiry 90d] [--subject <label>]`',
 	)
 }

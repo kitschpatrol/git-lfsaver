@@ -213,7 +213,7 @@ If a repository isn't hosted on GitHub — a bare repo on your own server, a mir
 
 The `pnpm run token` commands below run in your clone of this repository (the same one you deploy the worker from), not in the repo that uses LFS.
 
-Self-issued repos are addressed by a bare single-segment name — `https://lfs.example.com/<repo-name>` — with no owner. The path shape selects the credential type: single-segment URLs accept only self-issued tokens, while owner-qualified `/<owner>/<repo>` URLs accept GitHub credentials — or a self-issued token carrying an [explicit grant](#sharing-a-github-backed-repo-without-a-github-account) minted with `--github-repo-id`. Because the token itself is the authorization, `GITHUB_ALLOWED_OWNERS` plays no part for single-segment repos.
+Self-issued repos are addressed by a bare single-segment name — `https://lfs.example.com/<repo-name>` — with no owner. The path shape selects the credential type: single-segment URLs accept only self-issued tokens, while owner-qualified `/<owner>/<repo>` URLs accept GitHub credentials — or a self-issued token carrying an [explicit grant](#sharing-a-github-backed-repo-without-a-github-account). Because the token itself is the authorization, `GITHUB_ALLOWED_OWNERS` plays no part for single-segment repos.
 
 **One-time server setup:**
 
@@ -248,10 +248,10 @@ Self-issued repos are addressed by a bare single-segment name — `https://lfs.e
 
 ### Sharing a GitHub-backed repo without a GitHub account
 
-Normally a GitHub-hosted repo's LFS objects require GitHub credentials. To hand access to someone outside GitHub entirely, mint an explicit grant by adding `--github-repo-id` with the repo's numeric ID (from `gh api repos/<owner>/<name> --jq .id`) and the owner-qualified `--repo` path:
+Normally a GitHub-hosted repo's LFS objects require GitHub credentials. To hand access to someone outside GitHub entirely, mint an explicit grant by passing the owner-qualified `--repo` path — the repo's immutable numeric ID is resolved from the GitHub API at mint time (private repos need a `gh` login or `GITHUB_TOKEN`):
 
 ```sh
-pnpm run token mint --repo example-owner/example-repo --github-repo-id 12345678 --host lfs.example.com --pull --expiry 30d --subject contractor
+pnpm run token mint --repo example-owner/example-repo --host lfs.example.com --pull --expiry 30d --subject contractor
 ```
 
 The holder uses the repo's normal `.lfsconfig` (the same owner-qualified URL as everyone else) with the token as their password. Understand what this trades away: the grant bypasses GitHub's permission model, so removing someone from the GitHub repo does **not** revoke their token — only expiry or key rotation does. Keep these expiries short.

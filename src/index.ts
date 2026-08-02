@@ -548,7 +548,7 @@ async function authorizeRequest(
 	const { owner, repo } = address
 	if (isSelfIssuedToken) {
 		// Owner-qualified paths accept self-issued tokens only when they carry
-		// an explicit GitHub repo grant (minted with --github-repo-id)
+		// an explicit GitHub repo grant (minted with an owner-qualified --repo)
 		return authorizeSelfIssuedToken(credential, audience, env, address, operation, requestId)
 	}
 
@@ -840,7 +840,7 @@ async function authorizeSelfIssuedToken(
 		if (!grantResult.success) {
 			return {
 				errorResponse: lfsErrorResponse(
-					`This self-issued token does not grant access to GitHub repository "${address.owner}/${address.repo}". Mint one with \`pnpm run token mint --github-repo-id\`.`,
+					`This self-issued token does not grant access to GitHub repository "${address.owner}/${address.repo}". Mint one with \`pnpm run token mint --repo ${address.owner}/${address.repo}\`.`,
 					requestId,
 					403,
 				),
