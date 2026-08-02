@@ -300,6 +300,18 @@ describe('permission matrix', () => {
 		const response = await postBatch('download', [{ oid: oidA, size: 8 }])
 		expect(response.status).toBe(404)
 	})
+
+	it('returns 429 instead of 404 when GitHub refuses the lookup with 403', async () => {
+		mockGitHubError(403)
+		const response = await postBatch('download', [{ oid: oidA, size: 8 }])
+		expect(response.status).toBe(429)
+	})
+
+	it('returns 429 when GitHub rate-limits the lookup with 429', async () => {
+		mockGitHubError(429)
+		const response = await postBatch('download', [{ oid: oidA, size: 8 }])
+		expect(response.status).toBe(429)
+	})
 })
 
 describe('resolved owner allowlist', () => {

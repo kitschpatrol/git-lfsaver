@@ -600,6 +600,18 @@ async function authorizeRequest(
 		}
 	}
 
+	// GitHub sends 403 for rate limits and policy blocks alike, so this can't
+	// claim the repo doesn't exist — distinguish it from the 404 below
+	if (repoResult.type === 'rate-limited') {
+		return {
+			errorResponse: lfsErrorResponse(
+				`GitHub rate-limited or refused the lookup of "${owner}/${repo}". Try again later; if this persists, check your token's access restrictions (e.g. SAML SSO authorization).`,
+				requestId,
+				429,
+			),
+		}
+	}
+
 	if (repoResult.type !== 'found') {
 		return {
 			errorResponse: lfsErrorResponse(
