@@ -25,7 +25,10 @@ import {
 type GitHubRepoInfo = RestEndpointMethodTypes['repos']['get']['response']['data']
 
 type GitHubRepoResult =
-	{ repoInfo: GitHubRepoInfo; type: 'found' } | { type: 'not-found' } | { type: 'unauthorized' }
+	| { repoInfo: GitHubRepoInfo; type: 'found' }
+	| { type: 'not-found' }
+	| { type: 'rate-limited' }
+	| { type: 'unauthorized' }
 
 type AuthorizationResult = { errorResponse: Response } | { storagePrefix: string }
 
@@ -397,6 +400,12 @@ async function authorizeRequest(
 ): Promise<AuthorizationResult> {
 	const credential = getCredential(request)
 	if (credential === undefined) {
+		// Public GitHub repos allow anonymous downloads, mirroring GitHub's own
+		// LFS behavior; everything else requires a credential
+		if (operation === 'download' && address.type === 'github') {
+			return authorizeAnonymousDownload(address.owner, address.repo, requestId)
+		}
+
 		return {
 			errorResponse: lfsErrorResponse(
 				'No credential provided. Send a GitHub personal access token, a GitHub Actions OIDC token, or a self-issued token as the Basic auth password.',
@@ -461,7 +470,7 @@ async function authorizeRequest(
 		}
 	}
 
-	if (repoResult.type === 'not-found') {
+	if (repoResult.type !== 'found') {
 		return {
 			errorResponse: lfsErrorResponse(
 				`No GitHub repository found for "${owner}/${repo}".`,
@@ -485,6 +494,51 @@ async function authorizeRequest(
 		return { errorResponse: operationForbiddenResponse(operation, owner, repo, requestId) }
 	}
 
+	return { storagePrefix }
+}
+
+async function authorizeAnonymousDownload(
+	owner: string,
+	repo: string,
+	requestId: string,
+): Promise<AuthorizationResult> {
+	// An unauthenticated GitHub API hit can only ever see public repos, so a
+	// successful lookup is proof of public visibility. Cached like credentialed
+	// authorizations; the "anonymous:" prefix can't collide with the hex
+	// credential hashes used as cache keys
+	const cacheKey = `anonymous:${owner.toLowerCase()}/${repo.toLowerCase()}`
+	const cached = getCachedAuthorization(cacheKey)
+	if (cached !== undefined) {
+		return { storagePrefix: cached.storagePrefix }
+	}
+
+	const repoResult = await getGitHubRepoInfo(owner, repo, undefined)
+	if (repoResult.type === 'rate-limited') {
+		// Unauthenticated GitHub API calls share a per-IP rate limit across
+		// Workers tenants, so fall back to asking for credentials
+		return {
+			errorResponse: lfsErrorResponse(
+				'Anonymous access is temporarily unavailable (GitHub API rate limit). Authenticate to proceed.',
+				requestId,
+				401,
+				unauthorizedHeaders,
+			),
+		}
+	}
+
+	if (repoResult.type !== 'found') {
+		return {
+			errorResponse: lfsErrorResponse(
+				`No public GitHub repository found for "${owner}/${repo}". Authenticate to access private repositories.`,
+				requestId,
+				401,
+				unauthorizedHeaders,
+			),
+		}
+	}
+
+	const storagePrefix = String(repoResult.repoInfo.id)
+	setCachedAuthorization(cacheKey, { permissions: { pull: true, push: false }, storagePrefix })
 	return { storagePrefix }
 }
 
@@ -785,7 +839,7 @@ function getCredential(request: Request): string | undefined {
 async function getGitHubRepoInfo(
 	owner: string,
 	repo: string,
-	personalAccessToken: string,
+	personalAccessToken: string | undefined,
 ): Promise<GitHubRepoResult> {
 	try {
 		const octokit = new Octokit({
@@ -796,8 +850,14 @@ async function getGitHubRepoInfo(
 	} catch (error) {
 		// Distinguish bad credentials from missing/inaccessible repos so clients
 		// get a credential prompt rather than a misleading 404
-		if (typeof error === 'object' && error !== null && 'status' in error && error.status === 401) {
-			return { type: 'unauthorized' }
+		if (typeof error === 'object' && error !== null && 'status' in error) {
+			if (error.status === 401) {
+				return { type: 'unauthorized' }
+			}
+
+			if (error.status === 403 || error.status === 429) {
+				return { type: 'rate-limited' }
+			}
 		}
 
 		return { type: 'not-found' }

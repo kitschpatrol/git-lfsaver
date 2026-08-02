@@ -167,7 +167,7 @@ By default, authentication is handled via an OIDC token. No secrets are stored, 
 
 ## Authentication strategies
 
-The worker accepts four kinds of credential, all sent through Git's standard Basic auth machinery (except OIDC in CI, which is wired up for you by the checkout action). Pick per person and per context — they coexist on the same server.
+The worker accepts four kinds of credential, all sent through Git's standard Basic auth machinery (except OIDC in CI, which is wired up for you by the checkout action). Pick per person and per context — they coexist on the same server. Public GitHub repos additionally allow [anonymous downloads](#what-if-my-repo-is-public) with no credential at all.
 
 ### GitHub `gh` token
 
@@ -279,7 +279,7 @@ Private repos are the primary use case: the worker mirrors your GitHub permissio
 
 ### What if my repo is public?
 
-Downloads are effectively open: GitHub reports pull permission on public repos for _any_ authenticated user, so anyone with a GitHub account can fetch your LFS objects (uploads still require push permission on the repo). Fully anonymous access isn't supported — consumers need any GitHub credential, supplied either via the [one-liner from Global Git setup](#global-git-setup) or by entering their username and a token at Git's prompt on first transfer. Credential config can't ride along in the committed repo (Git forbids this deliberately, since a credential helper is executable code), so put that one-liner in your repo's readme as a setup step.
+Anonymous downloads just work, mirroring GitHub's own LFS behavior: the worker confirms the repo is public via an unauthenticated GitHub API lookup (which by construction can't see private repos), then serves download URLs with no credential required — so `git clone` works for anyone. Uploads always require a credential with push permission. Two caveats: a repo flipped from public to private stays anonymously downloadable for up to the five-minute authorization cache, and if the unauthenticated GitHub API rate limit is hit the server falls back to prompting for credentials, where any GitHub account works.
 
 ### Why not use GitHub's built-in LFS support?
 
@@ -302,6 +302,10 @@ Nothing breaks: objects are stored under GitHub's immutable numeric repo ID, and
 ### What if I transfer ownership of my GitHub repo?
 
 The numeric repo ID survives ownership transfers, so stored objects remain accessible. Add the new owner to `ALLOWED_OWNERS`, redeploy, and update the `.lfsconfig` URL to the new path.
+
+### What if I delete my repo?
+
+TODO
 
 ### What if my repo's not hosted on GitHub?
 

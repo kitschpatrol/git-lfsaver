@@ -772,3 +772,96 @@ describe('self-issued github grant authentication', () => {
 		expect(response.status).toBe(403)
 	})
 })
+
+describe('anonymous public repo downloads', () => {
+	// Each test uses a distinct repo name: the anonymous authorization cache is
+	// keyed by repo (not credential), so reuse would couple tests
+
+	function mockPublicRepo(repoName: string, id: number): void {
+		pendingMocks.push({
+			method: 'GET',
+			response: () => Response.json({ id }),
+			url: `https://api.github.com/repos/kitschpatrol/${repoName}`,
+		})
+	}
+
+	function mockPublicRepoError(repoName: string, status: number): void {
+		pendingMocks.push({
+			method: 'GET',
+			response: () => Response.json({ message: 'GitHub error' }, { status }),
+			url: `https://api.github.com/repos/kitschpatrol/${repoName}`,
+		})
+	}
+
+	async function postAnonymous(
+		repoName: string,
+		operation: 'download' | 'upload',
+	): Promise<Response> {
+		// Empty headers omit the default PAT Authorization header
+		return post(
+			`/kitschpatrol/${repoName}/objects/batch`,
+			{ objects: [{ oid: oidA, size: 8 }], operation },
+			{},
+		)
+	}
+
+	it('allows downloads from public repos with no credential', async () => {
+		mockPublicRepo('anon-public', 111)
+		mockObjectHead(oidA, 200, 8, '111')
+		const response = await postAnonymous('anon-public', 'download')
+		expect(response.status).toBe(200)
+
+		const body = await parseBatchResponse(response)
+		const download = getSuccessObject(body, oidA).actions?.download
+		if (download === undefined) {
+			throw new Error('Expected download action')
+		}
+
+		// Anonymous downloads resolve the same numeric storage prefix as
+		// credentialed GitHub access
+		expect(new URL(download.href).pathname).toBe(`/111/${oidA}`)
+	})
+
+	it('caches the public visibility lookup', async () => {
+		// A single GitHub response is mocked for two batches: a second API call
+		// would throw on the unmatched fetch
+		mockPublicRepo('anon-cached', 222)
+		mockObjectHead(oidA, 200, 8, '222')
+		mockObjectHead(oidA, 200, 8, '222')
+
+		const first = await postAnonymous('anon-cached', 'download')
+		expect(first.status).toBe(200)
+
+		const second = await postAnonymous('anon-cached', 'download')
+		expect(second.status).toBe(200)
+	})
+
+	it('prompts for credentials when the repo is private or missing', async () => {
+		mockPublicRepoError('anon-private', 404)
+		const response = await postAnonymous('anon-private', 'download')
+		expect(response.status).toBe(401)
+		expect(response.headers.get('LFS-Authenticate')).toBe('Basic realm="Git LFS"')
+	})
+
+	it('prompts for credentials when the GitHub API rate limit is hit', async () => {
+		mockPublicRepoError('anon-limited', 403)
+		const response = await postAnonymous('anon-limited', 'download')
+		expect(response.status).toBe(401)
+		expect(response.headers.get('LFS-Authenticate')).toBe('Basic realm="Git LFS"')
+	})
+
+	it('rejects anonymous uploads', async () => {
+		// No GitHub mock: anonymous authorization never runs for uploads
+		const response = await postAnonymous('anon-upload', 'upload')
+		expect(response.status).toBe(401)
+	})
+
+	it('rejects anonymous requests on single-segment paths', async () => {
+		const response = await post(
+			`/${selfIssuedRepoName}/objects/batch`,
+			{ objects: [{ oid: oidA, size: 8 }], operation: 'download' },
+			{},
+		)
+		expect(response.status).toBe(401)
+	})
+})
