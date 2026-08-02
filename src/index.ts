@@ -335,7 +335,7 @@ async function handleBatch(
 
 	const context: ObjectContext = {
 		env,
-		...createR2Clients(env),
+		...createS3Clients(env),
 		storagePrefix: authorization.storagePrefix,
 		// Echo the request's own path shape (default, explicit-host, or
 		// self-issued) so the client verifies against the URL form it already uses
@@ -397,7 +397,7 @@ async function handleVerify(
 	}
 
 	const { oid, size } = result.data
-	const { readOnlyClient } = createR2Clients(env)
+	const { readOnlyClient } = createS3Clients(env)
 	const headResponse = await readOnlyClient.fetch(
 		getObjectUrl(env, authorization.storagePrefix, oid),
 		{ method: 'HEAD' },
@@ -903,21 +903,21 @@ async function getGitHubRepoInfo(
 	}
 }
 
-function createR2Clients(env: Env): { readOnlyClient: AwsClient; readWriteClient: AwsClient } {
+function createS3Clients(env: Env): { readOnlyClient: AwsClient; readWriteClient: AwsClient } {
 	return {
 		readOnlyClient: new AwsClient({
-			accessKeyId: env.R2_S3_READ_KEY_ID,
-			secretAccessKey: env.R2_S3_READ_SECRET_KEY,
+			accessKeyId: env.S3_READ_KEY_ID,
+			secretAccessKey: env.S3_READ_SECRET_KEY,
 		}),
 		readWriteClient: new AwsClient({
-			accessKeyId: env.R2_S3_READ_WRITE_KEY_ID,
-			secretAccessKey: env.R2_S3_READ_WRITE_SECRET_KEY,
+			accessKeyId: env.S3_READ_WRITE_KEY_ID,
+			secretAccessKey: env.S3_READ_WRITE_SECRET_KEY,
 		}),
 	}
 }
 
 function getObjectUrl(env: Env, storagePrefix: string, oid: string): string {
-	return `https://${env.R2_S3_BUCKET}.${env.R2_S3_ENDPOINT}/${storagePrefix}/${oid}`
+	return `https://${env.S3_BUCKET}.${env.S3_ENDPOINT}/${storagePrefix}/${oid}`
 }
 
 async function sign(
@@ -927,7 +927,7 @@ async function sign(
 	method: 'GET' | 'PUT',
 	uploadConstraints?: { contentLength: number; contentSha256: string },
 ): Promise<string> {
-	const url = new URL(`https://${env.R2_S3_BUCKET}.${env.R2_S3_ENDPOINT}`)
+	const url = new URL(`https://${env.S3_BUCKET}.${env.S3_ENDPOINT}`)
 	url.pathname = path
 	url.searchParams.set('X-Amz-Expires', String(env.EXPIRY))
 

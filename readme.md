@@ -76,12 +76,12 @@ Do this once to host LFS files for as many repositories as you'd like. We'll ass
 6. Provide the bucket credentials as Worker secrets in a `.env`:
 
    ```ini
-   R2_S3_BUCKET = example-lfs
-   R2_S3_ENDPOINT = <account-id>.r2.cloudflarestorage.com
-   R2_S3_READ_KEY_ID = <read-only key id>
-   R2_S3_READ_SECRET_KEY = <read-only secret>
-   R2_S3_READ_WRITE_KEY_ID = <read/write key id>
-   R2_S3_READ_WRITE_SECRET_KEY = <read/write secret>
+   S3_BUCKET = example-lfs
+   S3_ENDPOINT = <account-id>.r2.cloudflarestorage.com
+   S3_READ_KEY_ID = <read-only key id>
+   S3_READ_SECRET_KEY = <read-only secret>
+   S3_READ_WRITE_KEY_ID = <read/write key id>
+   S3_READ_WRITE_SECRET_KEY = <read/write secret>
    ```
 
    The checked-in `.template.env` can generate this from 1Password via `pnpm run init` (`op inject`) — point its `op://` references at your own vault items. The generated `.env` file is gitignored.
@@ -264,7 +264,7 @@ The holder uses the repo's normal `.lfsconfig` (the same owner-qualified URL as 
 
 ### Alternate storage providers
 
-Storage speaks plain SigV4, so any S3-compatible provider that supports presigned URLs and virtual-hosted-style addressing (`https://<bucket>.<endpoint>/…`) should work by pointing `R2_S3_ENDPOINT` at it — though only R2 is tested. Providers that require path-style addressing or an explicit signing region would need small changes. Note that upload integrity enforcement depends on the provider validating the signed `x-amz-content-sha256` header, as R2 does — on providers that ignore it, uploads are still size-capped but not hash-pinned.
+Storage speaks plain SigV4, so any S3-compatible provider that supports presigned URLs and virtual-hosted-style addressing (`https://<bucket>.<endpoint>/…`) should work by pointing `S3_ENDPOINT` at it — though only R2 is tested. Providers that require path-style addressing or an explicit signing region would need small changes. Note that upload integrity enforcement depends on the provider validating the signed `x-amz-content-sha256` header, as R2 does — on providers that ignore it, uploads are still size-capped but not hash-pinned.
 
 ## Limits
 

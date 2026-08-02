@@ -10,12 +10,12 @@ export default defineConfig({
 			// without .env, and never touch real infrastructure
 			miniflare: {
 				bindings: {
-					R2_S3_BUCKET: 'test-bucket',
-					R2_S3_ENDPOINT: 'example.r2.cloudflarestorage.com',
-					R2_S3_READ_KEY_ID: 'test-read-key',
-					R2_S3_READ_SECRET_KEY: 'test-read-secret',
-					R2_S3_READ_WRITE_KEY_ID: 'test-write-key',
-					R2_S3_READ_WRITE_SECRET_KEY: 'test-write-secret',
+					S3_BUCKET: 'test-bucket',
+					S3_ENDPOINT: 'example.r2.cloudflarestorage.com',
+					S3_READ_KEY_ID: 'test-read-key',
+					S3_READ_SECRET_KEY: 'test-read-secret',
+					S3_READ_WRITE_KEY_ID: 'test-write-key',
+					S3_READ_WRITE_SECRET_KEY: 'test-write-secret',
 					// Public half of the test-only signing key in transfer.spec.ts
 					SELF_ISSUED_TOKEN_PUBLIC_KEY: 'md403Y-XQZSe0jQscBC8anBx-IQlxvKmSjvV3LbAad0',
 				},

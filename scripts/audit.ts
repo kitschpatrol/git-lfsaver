@@ -86,19 +86,17 @@ async function loadBucketConfig(): Promise<BucketConfig> {
 		variables[key] = value
 	}
 
-	const bucket = variables.R2_S3_BUCKET
-	const endpoint = variables.R2_S3_ENDPOINT
-	const keyId = variables.R2_S3_READ_KEY_ID
-	const secretKey = variables.R2_S3_READ_SECRET_KEY
+	const bucket = variables.S3_BUCKET
+	const endpoint = variables.S3_ENDPOINT
+	const keyId = variables.S3_READ_KEY_ID
+	const secretKey = variables.S3_READ_SECRET_KEY
 	if (
 		bucket === undefined ||
 		endpoint === undefined ||
 		keyId === undefined ||
 		secretKey === undefined
 	) {
-		fail(
-			'.env is missing one of R2_S3_BUCKET, R2_S3_ENDPOINT, R2_S3_READ_KEY_ID, or R2_S3_READ_SECRET_KEY.',
-		)
+		fail('.env is missing one of S3_BUCKET, S3_ENDPOINT, S3_READ_KEY_ID, or S3_READ_SECRET_KEY.')
 	}
 
 	return { bucket, endpoint, keyId, secretKey }
