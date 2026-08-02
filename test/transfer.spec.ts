@@ -866,6 +866,16 @@ describe('anonymous public repo downloads', () => {
 	})
 })
 
+describe('path parsing', () => {
+	it('rejects malformed percent-encoding with 422 instead of crashing', async () => {
+		const response = await post('/kitschpatrol/repo%zz/objects/batch', {
+			objects: [{ oid: oidA, size: 8 }],
+			operation: 'download',
+		})
+		expect(response.status).toBe(422)
+	})
+})
+
 describe('explicit provider host paths', () => {
 	it('treats /github.com/<owner>/<repo> the same as the two-segment default', async () => {
 		mockGitHubRepo({ pull: true, push: true })

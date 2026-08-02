@@ -198,7 +198,21 @@ function parseRepoAddress(
 	env: Env,
 	requestId: string,
 ): { address: RepoAddress } | { errorResponse: Response } {
-	const repoSegments = pathParts.slice(1, -2).map((part) => decodeURIComponent(part))
+	let repoSegments: string[]
+	try {
+		repoSegments = pathParts.slice(1, -2).map((part) => decodeURIComponent(part))
+	} catch {
+		// Malformed percent-encoding (e.g. "%zz") throws URIError; without this
+		// it would surface as an unauthenticated 500
+		return {
+			errorResponse: lfsErrorResponse(
+				`Invalid percent-encoding in request URL pathname "${pathname}". Double check your lfs.url value in your .lfsconfig file.`,
+				requestId,
+				422,
+			),
+		}
+	}
+
 	if (repoSegments.some((segment) => segment.length === 0)) {
 		return {
 			errorResponse: lfsErrorResponse(
