@@ -362,6 +362,15 @@ describe('download batch', () => {
 		expect(getSuccessObject(body, oidA).actions?.download).toBeDefined()
 		expect(getErrorObject(body, oidB).error.code).toBe(404)
 	})
+
+	it('returns a per-object 502 instead of signing when storage errors', async () => {
+		mockGitHubRepo({ pull: true, push: false })
+		mockObjectHead(oidA, 500)
+		const response = await postBatch('download', [{ oid: oidA, size: 8 }])
+		expect(response.status).toBe(200)
+		const body = await parseBatchResponse(response)
+		expect(getErrorObject(body, oidA).error.code).toBe(502)
+	})
 })
 
 describe('upload batch', () => {
@@ -415,6 +424,14 @@ describe('upload batch', () => {
 		const body = await parseBatchResponse(response)
 		expect(getErrorObject(body, oidA).error.code).toBe(413)
 	})
+
+	it('returns a per-object 502 instead of signing when storage errors', async () => {
+		mockGitHubRepo({ pull: true, push: true })
+		mockObjectHead(oidA, 503)
+		const response = await postBatch('upload', [{ oid: oidA, size: 8 }])
+		const body = await parseBatchResponse(response)
+		expect(getErrorObject(body, oidA).error.code).toBe(502)
+	})
 })
 
 describe('verify endpoint', () => {
@@ -445,6 +462,13 @@ describe('verify endpoint', () => {
 		mockGitHubRepo({ pull: true, push: false })
 		const response = await post('/kitschpatrol/repo/objects/verify', { oid: oidA, size: 8 })
 		expect(response.status).toBe(403)
+	})
+
+	it('returns 502 instead of "not found" when storage errors', async () => {
+		mockGitHubRepo({ pull: true, push: true })
+		mockObjectHead(oidA, 500)
+		const response = await post('/kitschpatrol/repo/objects/verify', { oid: oidA, size: 8 })
+		expect(response.status).toBe(502)
 	})
 })
 

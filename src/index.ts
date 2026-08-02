@@ -465,6 +465,14 @@ async function handleVerify(
 		{ method: 'HEAD' },
 	)
 
+	if (headResponse.status !== 200 && headResponse.status !== 404) {
+		return lfsErrorResponse(
+			`Storage returned HTTP ${headResponse.status} while verifying object "${oid}". Try again later.`,
+			requestId,
+			502,
+		)
+	}
+
 	if (headResponse.status !== 200) {
 		return lfsErrorResponse(
 			`Object "${oid}" was not found in storage. The upload may have failed, try pushing again.`,
@@ -1002,13 +1010,19 @@ async function getGitHubRepoInfo(
 }
 
 function createS3Clients(env: Env): { readOnlyClient: AwsClient; readWriteClient: AwsClient } {
+	// The aws4fetch default of 10 retries with backoff would turn a 100-object
+	// batch into over a thousand subrequests during a storage outage, blowing
+	// the Workers subrequest limit. Fail fast instead; the git-lfs client has
+	// its own retry logic.
 	return {
 		readOnlyClient: new AwsClient({
 			accessKeyId: env.S3_READ_KEY_ID,
+			retries: 0,
 			secretAccessKey: env.S3_READ_SECRET_KEY,
 		}),
 		readWriteClient: new AwsClient({
 			accessKeyId: env.S3_READ_WRITE_KEY_ID,
+			retries: 0,
 			secretAccessKey: env.S3_READ_WRITE_SECRET_KEY,
 		}),
 	}
@@ -1074,6 +1088,19 @@ async function processObject(
 	const headResponse = await readOnlyClient.fetch(getObjectUrl(env, storagePrefix, oid), {
 		method: 'HEAD',
 	})
+
+	// Anything other than "exists" or "missing" is a storage-side failure —
+	// don't sign URLs against an unknown state
+	if (headResponse.status !== 200 && headResponse.status !== 404) {
+		return {
+			error: {
+				code: 502,
+				message: `Storage returned HTTP ${headResponse.status} while checking the object. Try again later.`,
+			},
+			oid,
+			size,
+		} satisfies GitLfsBatchResponseErrorObject
+	}
 
 	if (operation === 'download') {
 		if (headResponse.status === 404) {
