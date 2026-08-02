@@ -36,7 +36,7 @@
 		"init": "op inject -i .template.env -o .env",
 		"lint": "ksc lint --skip repo",
 		"prepare": "pnpm run build",
-		"release": "bumpp -a -x 'pnpm run build' -c 'Release: %s' --tag '%s'",
+		"release": "bumpp -c 'Release: %s'",
 		"test": "vitest run",
 		"token": "node scripts/token.ts"
 	},

@@ -57,11 +57,13 @@ Do this once to host LFS files for as many repositories as you'd like. We'll ass
    3. Permissions: Object Read
    4. Specify Buckets: apply to `example-lfs` only
 
-4. Clone this repo:
+4. Fork this repo and clone your fork:
 
    ```sh
-   gh repo clone kitschpatrol/git-lfsaver
+   gh repo fork kitschpatrol/git-lfsaver --clone
    ```
+
+   A fork is recommended over a plain clone because deployment configuration is committed to the repository, so your setup edits in the next step become commits you carry — see [Updating the server](#updating-the-server).
 
 5. Configure `wrangler.jsonc` in the cloned repository root:
 
@@ -170,6 +172,18 @@ steps:
 ```
 
 By default, authentication is handled via an OIDC token. No secrets are stored, and fork PRs can't obtain the token. See the [action's readme](https://github.com/kitschpatrol/github-action-checkout-git-lfsaver) for more details on configuration and authentication.
+
+### Updating the server
+
+Deployment configuration is committed rather than kept aside: `wrangler.jsonc` holds your routes and vars, and `worker-configuration.d.ts` is regenerated from them. Secrets stay in the gitignored `.env`. Working from a fork keeps your configuration as commits while letting you pull improvements from upstream:
+
+```sh
+git fetch upstream
+git merge upstream/main
+pnpm run deploy
+```
+
+(`gh repo fork --clone` sets up the `upstream` remote for you.) Merge conflicts, if any, are confined to your configuration edits. If the generated `worker-configuration.d.ts` conflicts, don't resolve it by hand — take either side and rerun `pnpm exec wrangler types`.
 
 ## Authentication strategies
 
