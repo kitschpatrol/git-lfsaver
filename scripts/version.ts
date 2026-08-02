@@ -103,4 +103,4 @@ const versionJson = {
 const versionJsonUrl = new URL('../src/version.json', import.meta.url)
 const contents = `${JSON.stringify(versionJson, undefined, '\t')}\n`
 await writeFile(versionJsonUrl, contents)
-console.log(`Wrote ${fileURLToPath(versionJsonUrl)}:\n${contents}`)
+console.log(`Wrote ${fileURLToPath(versionJsonUrl)}`)
