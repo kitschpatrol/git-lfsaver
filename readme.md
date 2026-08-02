@@ -9,7 +9,7 @@
 
 <!-- short-description -->
 
-**A serverless Git LFS server for Cloudflare Workers + R2**
+**A serverless Git LFS server for Cloudflare Workers + R2 with seamless GitHub auth.**
 
 <!-- /short-description -->
 
@@ -88,6 +88,8 @@ Do this once to host LFS files for as many repositories as you'd like. We'll ass
    pnpm run deploy
    ```
 
+   The deployed worker reports version info at `https://lfs.example.com/version.json`.
+
 8. Protect:
 
    Optionally add a [Cloudflare rate-limiting rule](https://developers.cloudflare.com/waf/rate-limiting-rules/) to block heavy traffic on the LFS hostname to blunt credential stuffing and abuse.
@@ -96,7 +98,7 @@ Do this once to host LFS files for as many repositories as you'd like. We'll ass
 
 Do this once on your dev machine:
 
-1. Install the Git LFS client if you haven't already:
+1. Install the Git LFS client if you haven't already (e.g. `brew install git-lfs`), then initialize it once:
 
    ```sh
    git lfs install
@@ -321,7 +323,7 @@ The numeric repo ID survives ownership transfers, so stored objects remain acces
 
 The stored objects are stranded, not deleted: the worker has no deletion path, and once GitHub stops recognizing the repo nobody can authorize against it — but its objects keep occupying (and billing) bucket space under the repo's `github.com/<id>` prefix. Run `pnpm run audit` (in your clone of this repo) to list every prefix with its repository, object count, size, and status — deleted repos show as `orphaned` — then remove those prefixes from the bucket with `wrangler`, `rclone`, or the Cloudflare dashboard. This is a feature as much as a gap: it's your data in your bucket, recoverable until you delete it — unlike GitHub LFS, where purging data requires a support ticket.
 
-### What if my repo's not hosted on GitHub?
+### What if my repo's self-hosted somewhere?
 
 Use [self-issued tokens](#repos-not-on-github-self-issued-tokens): the repo gets a single-segment URL (`https://lfs.example.com/<repo-name>`) and you mint signed tokens for each person — no GitHub involvement at any step.
 

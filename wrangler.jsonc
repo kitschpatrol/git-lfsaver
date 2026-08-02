@@ -17,7 +17,7 @@
 	"routes": [
 		{
 			// Your domain
-			"pattern": "lfs.example.com",
+			"pattern": "lfs.kitschpatrol.com",
 			"custom_domain": true,
 		},
 	],
@@ -29,7 +29,7 @@
 	"vars": {
 		/* GitHub owners (users or orgs) whose repos may use this server. An
 		 * empty array rejects everyone. Not consulted for self-issued repos. */
-		"GITHUB_ALLOWED_OWNERS": ["example"],
+		"GITHUB_ALLOWED_OWNERS": ["kitschpatrol"],
 		/* Some clients might not set headers correctly... */
 		"ENFORCE_MIME": true,
 		/* Pre-signed URL expiry in seconds. Expiry gates when a transfer may

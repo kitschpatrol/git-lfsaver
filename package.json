@@ -2,7 +2,7 @@
 	"name": "git-lfsaver",
 	"version": "0.0.1",
 	"private": true,
-	"description": "A serverless Git LFS server for Cloudflare Workers + R2",
+	"description": "A serverless Git LFS server for Cloudflare Workers + R2 with seamless GitHub auth.",
 	"keywords": [
 		"git",
 		"lfs",
@@ -28,13 +28,14 @@
 	"type": "module",
 	"scripts": {
 		"audit": "node scripts/audit.ts",
-		"build": "echo 'No build necessary'",
+		"build": "node scripts/version.ts",
 		"clean": "shx rm -f pnpm-lock.yaml && git clean -fdX -e !.claude/",
-		"deploy": "wrangler deploy --secrets-file .env",
+		"deploy": "pnpm run build && wrangler deploy --secrets-file .env",
 		"dev": "wrangler types && wrangler dev",
 		"fix": "ksc fix --skip repo",
 		"init": "op inject -i .template.env -o .env",
 		"lint": "ksc lint --skip repo",
+		"release": "bumpp -a -x 'pnpm run build' -c 'Release: %s' --tag '%s'",
 		"test": "vitest run",
 		"token": "node scripts/token.ts"
 	},
@@ -47,6 +48,7 @@
 	"devDependencies": {
 		"@cloudflare/vitest-pool-workers": "^0.19.1",
 		"@kitschpatrol/shared-config": "^8.5.0",
+		"bumpp": "^12.1.1",
 		"shx": "^0.4.0",
 		"typescript": "^6.0.3",
 		"vitest": "^4.1.10",
