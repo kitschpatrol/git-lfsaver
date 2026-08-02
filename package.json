@@ -27,6 +27,7 @@
 	},
 	"type": "module",
 	"scripts": {
+		"audit": "node scripts/audit.ts",
 		"build": "echo 'No build necessary'",
 		"clean": "shx rm -f pnpm-lock.yaml && git clean -fdX -e !.claude/",
 		"deploy": "wrangler deploy --secrets-file .env",

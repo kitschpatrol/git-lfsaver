@@ -305,7 +305,7 @@ The numeric repo ID survives ownership transfers, so stored objects remain acces
 
 ### What if I delete my repo?
 
-TODO
+The stored objects are stranded, not deleted: the worker has no deletion path, and once GitHub stops recognizing the repo nobody can authorize against it — but its objects keep occupying (and billing) bucket space under the repo's numeric ID prefix. Run `pnpm run audit` (in your clone of this repo) to list every prefix with its repository, object count, size, and status — deleted repos show as `orphaned` — then remove those prefixes from the bucket with `wrangler`, `rclone`, or the Cloudflare dashboard. This is a feature as much as a gap: it's your data in your bucket, recoverable until you delete it — unlike GitHub LFS, where purging data requires a support ticket.
 
 ### What if my repo's not hosted on GitHub?
 
