@@ -67,7 +67,7 @@ Do this once to host LFS files for as many repositories as you'd like. We'll ass
 
    - `GITHUB_ALLOWED_OWNERS`: array of GitHub users or orgs whose repositories may use the server. An empty array rejects everyone.
    - `routes`: your custom domain, e.g. `lfs.example.com`.
-   - Optionally adjust `EXPIRY` (presigned URL lifetime in seconds) and `MAX_FILE_SIZE` (bytes, capped by [R2's single-PUT limit](https://developers.cloudflare.com/r2/platform/limits/)).
+   - Optionally adjust `EXPIRY` (presigned URL lifetime in seconds) and `MAX_UPLOAD_FILE_SIZE` (bytes, capped by [R2's single-PUT limit](https://developers.cloudflare.com/r2/platform/limits/)).
 
 6. Provide the bucket credentials as Worker secrets in a `.env`:
 
@@ -266,7 +266,7 @@ Storage speaks plain SigV4, so any S3-compatible provider that supports presigne
 
 ## Limits
 
-- Objects up to `MAX_FILE_SIZE` (default just under 5 GB, R2's single-PUT ceiling). Multipart uploads for larger objects are not supported.
+- Uploads up to `MAX_UPLOAD_FILE_SIZE` (default just under 5 GB, R2's single-PUT ceiling). Multipart uploads for larger objects are not supported.
 - Batches up to 100 objects (the git-lfs client default). Each object costs one R2 subrequest, so the Workers paid plan's subrequest limit is recommended over the free plan's 50.
 - File locking is not supported.
 

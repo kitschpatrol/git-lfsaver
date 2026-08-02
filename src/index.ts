@@ -1089,12 +1089,13 @@ async function processObject(
 ): Promise<GitLfsBatchResponseErrorObject | GitLfsBatchResponseObject> {
 	const { env, readOnlyClient, readWriteClient, storagePrefix, verifyUrl } = context
 
-	// Check for max size...
-	if (size > env.MAX_FILE_SIZE) {
+	// Uploads only: objects already in storage must stay downloadable even if
+	// MAX_UPLOAD_FILE_SIZE is later lowered beneath their size
+	if (operation === 'upload' && size > env.MAX_UPLOAD_FILE_SIZE) {
 		return {
 			error: {
 				code: 413,
-				message: `File size exceeds the maximum allowed size of ${env.MAX_FILE_SIZE} bytes.`,
+				message: `File size exceeds the maximum allowed upload size of ${env.MAX_UPLOAD_FILE_SIZE} bytes.`,
 			},
 			oid,
 			size,

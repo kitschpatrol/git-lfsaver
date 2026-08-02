@@ -371,6 +371,18 @@ describe('download batch', () => {
 		const body = await parseBatchResponse(response)
 		expect(getErrorObject(body, oidA).error.code).toBe(502)
 	})
+
+	it('signs downloads for stored objects larger than MAX_UPLOAD_FILE_SIZE', async () => {
+		// The size cap applies to uploads only: lowering MAX_UPLOAD_FILE_SIZE
+		// must not strand objects already in storage
+		mockGitHubRepo({ pull: true, push: false })
+		const oversize = env.MAX_UPLOAD_FILE_SIZE + 1
+		mockObjectHead(oidA, 200, oversize)
+		const response = await postBatch('download', [{ oid: oidA, size: oversize }])
+		expect(response.status).toBe(200)
+		const body = await parseBatchResponse(response)
+		expect(getSuccessObject(body, oidA).actions?.download).toBeDefined()
+	})
 })
 
 describe('upload batch', () => {
@@ -420,7 +432,7 @@ describe('upload batch', () => {
 
 	it('returns a per-object 413 for oversize objects', async () => {
 		mockGitHubRepo({ pull: true, push: true })
-		const response = await postBatch('upload', [{ oid: oidA, size: env.MAX_FILE_SIZE + 1 }])
+		const response = await postBatch('upload', [{ oid: oidA, size: env.MAX_UPLOAD_FILE_SIZE + 1 }])
 		const body = await parseBatchResponse(response)
 		expect(getErrorObject(body, oidA).error.code).toBe(413)
 	})

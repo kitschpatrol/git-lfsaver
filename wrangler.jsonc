@@ -37,10 +37,11 @@
 		 * an action expires — so this only needs to cover the client's transfer
 		 * queue wait, and shorter is safer (issued URLs outlive revocation). */
 		"EXPIRY": 900,
-		/* Maximum file size in bytes, storage-dependent
+		/* Maximum upload size in bytes, storage-dependent. Applies to uploads
+		 * only, so lowering it never strands objects already in storage.
 		 * See https://developers.cloudflare.com/r2/platform/limits/
 		 */
-		"MAX_FILE_SIZE": 4995000000,
+		"MAX_UPLOAD_FILE_SIZE": 4995000000,
 		/* Base64url Ed25519 public key used to verify self-issued tokens for
 		 * repos that aren't on GitHub. Generate a key pair with
 		 * `pnpm run token generate-key` and paste the printed value here.

@@ -28,7 +28,7 @@ env:
   MIME: application/vnd.git-lfs+json
   # Well-formed SHA-256 OID that no real content hashes to
   MISSING_OID: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
-  # Larger than the worker's MAX_FILE_SIZE, so upload requests are authorized
+  # Larger than the worker's MAX_UPLOAD_FILE_SIZE, so upload requests are authorized
   # but refused per-object before a URL is signed
   OVERSIZED_BYTES: '9999999999999'
 
