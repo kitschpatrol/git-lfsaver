@@ -31,14 +31,14 @@ import process from 'node:process'
 import { parseArgs } from 'node:util'
 import { z } from 'zod'
 import {
-	isValidGitHubRepoPath,
-	isValidRepoName,
+	isValidGitHubRepositoryPath,
+	isValidRepositoryName,
 	selfIssuedTokenIssuer,
 } from '../src/self-issued.ts'
 
 const keyFile = 'token-signing-key.json'
 
-const gitHubRepoSchema = z.object({
+const gitHubRepositorySchema = z.object({
 	// eslint-disable-next-line ts/naming-convention -- GitHub API field names are snake_case
 	full_name: z.string(),
 	id: z.number().int().positive(),
@@ -72,7 +72,9 @@ function getGitHubToken(): string | undefined {
  * name at mint time, so the operator never hand-copies the ID (a transposition
  * there would silently grant a different repo's storage).
  */
-async function resolveGitHubRepo(repoPath: string): Promise<{ fullName: string; id: number }> {
+async function resolveGitHubRepository(
+	repositoryPath: string,
+): Promise<{ fullName: string; id: number }> {
 	const token = getGitHubToken()
 	const headers: Record<string, string> = {
 		// eslint-disable-next-line ts/naming-convention -- HTTP header name
@@ -85,14 +87,16 @@ async function resolveGitHubRepo(repoPath: string): Promise<{ fullName: string; 
 
 	let response: Response
 	try {
-		response = await fetch(`https://api.github.com/repos/${repoPath}`, { headers })
+		response = await fetch(`https://api.github.com/repos/${repositoryPath}`, { headers })
 	} catch {
-		fail(`Could not reach the GitHub API to resolve "${repoPath}". Check your network connection.`)
+		fail(
+			`Could not reach the GitHub API to resolve "${repositoryPath}". Check your network connection.`,
+		)
 	}
 
 	if (response.status === 404) {
 		fail(
-			`No GitHub repository found for "${repoPath}".${
+			`No GitHub repository found for "${repositoryPath}".${
 				token === undefined
 					? ' Private repositories require a credential: run `gh auth login` or set GITHUB_TOKEN.'
 					: ''
@@ -101,12 +105,12 @@ async function resolveGitHubRepo(repoPath: string): Promise<{ fullName: string; 
 	}
 
 	if (!response.ok) {
-		fail(`GitHub API request for "${repoPath}" failed with HTTP ${response.status}.`)
+		fail(`GitHub API request for "${repositoryPath}" failed with HTTP ${response.status}.`)
 	}
 
-	const parsed = gitHubRepoSchema.safeParse(await response.json())
+	const parsed = gitHubRepositorySchema.safeParse(await response.json())
 	if (!parsed.success) {
-		fail(`GitHub API returned an unexpected response for "${repoPath}".`)
+		fail(`GitHub API returned an unexpected response for "${repositoryPath}".`)
 	}
 
 	return { fullName: parsed.data.full_name, id: parsed.data.id }
@@ -168,12 +172,12 @@ async function mint(mintArguments: string[]): Promise<void> {
 	// repos, single-segment names are self-issued repos
 	const isGitHubGrant = repo.includes('/')
 	if (isGitHubGrant) {
-		if (!isValidGitHubRepoPath(repo)) {
+		if (!isValidGitHubRepositoryPath(repo)) {
 			fail(
 				'Pass --repo as the "<owner>/<name>" GitHub repository path, with each segment using letters, numbers, ".", "_", or "-".',
 			)
 		}
-	} else if (!isValidRepoName(repo)) {
+	} else if (!isValidRepositoryName(repo)) {
 		fail(
 			'Pass --repo as a single-segment repository name (no owner) using letters, numbers, ".", "_", or "-". It must match the name in the lfs.url path.',
 		)
@@ -200,23 +204,23 @@ async function mint(mintArguments: string[]): Promise<void> {
 
 	// Grants embed the canonical name GitHub resolves, so a token minted
 	// against a stale (renamed) path still matches the URL collaborators use
-	let repoClaim = repo
-	let githubRepoId: number | undefined
+	let repositoryClaim = repo
+	let githubRepositoryId: number | undefined
 	if (isGitHubGrant) {
-		const resolved = await resolveGitHubRepo(repo)
-		githubRepoId = resolved.id
+		const resolved = await resolveGitHubRepository(repo)
+		githubRepositoryId = resolved.id
 		if (resolved.fullName.toLowerCase() !== repo.toLowerCase()) {
 			console.error(
 				`Note: GitHub resolves "${repo}" to "${resolved.fullName}" (renamed or transferred) — minting for "${resolved.fullName}".`,
 			)
 		}
 
-		repoClaim = resolved.fullName
+		repositoryClaim = resolved.fullName
 	}
 
 	// eslint-disable-next-line ts/naming-convention -- JWT claim names are snake_case
-	const grantClaims = githubRepoId === undefined ? {} : { github_repo_id: githubRepoId }
-	let jwt = new SignJWT({ ...grantClaims, pull, push, repo: repoClaim })
+	const grantClaims = githubRepositoryId === undefined ? {} : { github_repo_id: githubRepositoryId }
+	let jwt = new SignJWT({ ...grantClaims, pull, push, repo: repositoryClaim })
 		.setProtectedHeader({ alg: 'EdDSA' })
 		.setIssuer(selfIssuedTokenIssuer)
 		.setAudience(host)
@@ -232,11 +236,11 @@ async function mint(mintArguments: string[]): Promise<void> {
 	console.log(token)
 	console.error('')
 	console.error(
-		`Grants ${[pull && 'download', push && 'upload'].filter(Boolean).join(' and ')} for "${repoClaim}" on "${host}", expires in ${expiry}.`,
+		`Grants ${[pull && 'download', push && 'upload'].filter(Boolean).join(' and ')} for "${repositoryClaim}" on "${host}", expires in ${expiry}.`,
 	)
-	if (githubRepoId !== undefined) {
+	if (githubRepositoryId !== undefined) {
 		console.error(
-			`This is an explicit grant to GitHub repository ID ${githubRepoId}: it bypasses GitHub's permission model, and revoking the holder's GitHub access will NOT revoke it — only expiry or key rotation will.`,
+			`This is an explicit grant to GitHub repository ID ${githubRepositoryId}: it bypasses GitHub's permission model, and revoking the holder's GitHub access will NOT revoke it — only expiry or key rotation will.`,
 		)
 	}
 

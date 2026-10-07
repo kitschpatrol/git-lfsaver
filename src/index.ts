@@ -23,10 +23,10 @@ import {
 } from './self-issued'
 import versionInfo from './version.json'
 
-type GitHubRepoInfo = RestEndpointMethodTypes['repos']['get']['response']['data']
+type GitHubRepositoryInfo = RestEndpointMethodTypes['repos']['get']['response']['data']
 
-type GitHubRepoResult =
-	| { repoInfo: GitHubRepoInfo; type: 'found' }
+type GitHubRepositoryResult =
+	| { repoInfo: GitHubRepositoryInfo; type: 'found' }
 	| { type: 'not-found' }
 	| { type: 'rate-limited' }
 	| { type: 'unauthorized' }
@@ -35,7 +35,8 @@ type AuthorizationResult = { errorResponse: Response } | { storagePrefix: string
 
 // GitHub repos are addressed as /<owner>/<repo>/…, self-issued (non-GitHub)
 // repos as /<repo-name>/… — the path shape selects the credential type
-type RepoAddress = { name: string; type: 'self' } | { owner: string; repo: string; type: 'github' }
+type RepositoryAddress =
+	{ name: string; type: 'self' } | { owner: string; repo: string; type: 'github' }
 
 type ObjectContext = {
 	env: Env
@@ -108,13 +109,13 @@ const authorizationCacheMaxEntries = 1000
 async function getAuthorizationCacheKey(
 	credential: string,
 	owner: string,
-	repo: string,
+	repository: string,
 ): Promise<string> {
 	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(credential))
 	const hash = Array.from(new Uint8Array(digest), (byte) =>
 		byte.toString(16).padStart(2, '0'),
 	).join('')
-	return `${hash}:${owner.toLowerCase()}/${repo.toLowerCase()}`
+	return `${hash}:${owner.toLowerCase()}/${repository.toLowerCase()}`
 }
 
 function getCachedAuthorization(key: string): CachedAuthorization | undefined {
@@ -176,7 +177,7 @@ export default {
 		const isBatch = url.pathname.endsWith('/objects/batch')
 		const isVerify = url.pathname.endsWith('/objects/verify')
 		if ((isBatch || isVerify) && pathParts.length >= 4 && pathParts.length <= 6) {
-			const parsed = parseRepoAddress(pathParts, url.pathname, env, requestId)
+			const parsed = parseRepositoryAddress(pathParts, url.pathname, env, requestId)
 			if ('errorResponse' in parsed) {
 				return parsed.errorResponse
 			}
@@ -199,15 +200,15 @@ export default {
  * - `/<host>/<owner>/<repo>` — explicit provider host; only github.com today,
  *   other forges reserved for later
  */
-function parseRepoAddress(
+function parseRepositoryAddress(
 	pathParts: string[],
 	pathname: string,
 	env: Env,
 	requestId: string,
-): { address: RepoAddress } | { errorResponse: Response } {
-	let repoSegments: string[]
+): { address: RepositoryAddress } | { errorResponse: Response } {
+	let repositorySegments: string[]
 	try {
-		repoSegments = pathParts.slice(1, -2).map((part) => decodeURIComponent(part))
+		repositorySegments = pathParts.slice(1, -2).map((part) => decodeURIComponent(part))
 	} catch {
 		// Malformed percent-encoding (e.g. "%zz") throws URIError; without this
 		// it would surface as an unauthenticated 500
@@ -220,7 +221,7 @@ function parseRepoAddress(
 		}
 	}
 
-	if (repoSegments.some((segment) => segment.length === 0)) {
+	if (repositorySegments.some((segment) => segment.length === 0)) {
 		return {
 			errorResponse: lfsErrorResponse(
 				`Invalid request URL pathname, expect "/<owner>/<repo>/objects/batch" (GitHub), "/<host>/<owner>/<repo>/objects/batch", or "/<repo-name>/objects/batch" (self-issued), received "${pathname}" Double check your lfs.url value in your .lfsconfig file.`,
@@ -230,12 +231,12 @@ function parseRepoAddress(
 		}
 	}
 
-	if (repoSegments.length === 1) {
-		return { address: { name: repoSegments[0] ?? '', type: 'self' } }
+	if (repositorySegments.length === 1) {
+		return { address: { name: repositorySegments[0] ?? '', type: 'self' } }
 	}
 
-	if (repoSegments.length === 3) {
-		const host = (repoSegments.shift() ?? '').toLowerCase()
+	if (repositorySegments.length === 3) {
+		const host = (repositorySegments.shift() ?? '').toLowerCase()
 		if (host !== 'github.com') {
 			return {
 				errorResponse: lfsErrorResponse(
@@ -247,7 +248,7 @@ function parseRepoAddress(
 		}
 	}
 
-	const [owner = '', repo = ''] = repoSegments
+	const [owner = '', repository = ''] = repositorySegments
 
 	// Reject repos outside the allowlist before doing any real work, otherwise
 	// anyone with a GitHub account can store objects in the bucket. Self-issued
@@ -263,7 +264,7 @@ function parseRepoAddress(
 		}
 	}
 
-	return { address: { owner, repo, type: 'github' } }
+	return { address: { owner, repo: repository, type: 'github' } }
 }
 
 function getStaticResponse(request: Request, url: URL, requestId: string): Response | undefined {
@@ -398,7 +399,7 @@ async function readJsonBody(
 async function handleBatch(
 	request: Request,
 	env: Env,
-	address: RepoAddress,
+	address: RepositoryAddress,
 	requestId: string,
 ): Promise<Response> {
 	// Read and validate the request
@@ -460,7 +461,7 @@ async function handleBatch(
 async function handleVerify(
 	request: Request,
 	env: Env,
-	address: RepoAddress,
+	address: RepositoryAddress,
 	requestId: string,
 ): Promise<Response> {
 	// Read and validate the request
@@ -524,7 +525,7 @@ async function handleVerify(
 async function authorizeRequest(
 	request: Request,
 	env: Env,
-	address: RepoAddress,
+	address: RepositoryAddress,
 	operation: 'download' | 'upload',
 	requestId: string,
 ): Promise<AuthorizationResult> {
@@ -581,15 +582,13 @@ async function authorizeRequest(
 	const cacheKey = await getAuthorizationCacheKey(credential, owner, repo)
 	const cached = getCachedAuthorization(cacheKey)
 	if (cached !== undefined) {
-		if (!hasOperationPermission(cached.permissions, operation)) {
-			return { errorResponse: operationForbiddenResponse(operation, owner, repo, requestId) }
-		}
-
-		return { storagePrefix: cached.storagePrefix }
+		return hasOperationPermission(cached.permissions, operation)
+			? { storagePrefix: cached.storagePrefix }
+			: { errorResponse: operationForbiddenResponse(operation, owner, repo, requestId) }
 	}
 
-	const repoResult = await getGitHubRepoInfo(owner, repo, credential)
-	if (repoResult.type === 'unauthorized') {
+	const repositoryResult = await getGitHubRepositoryInfo(owner, repo, credential)
+	if (repositoryResult.type === 'unauthorized') {
 		return {
 			errorResponse: lfsErrorResponse(
 				'GitHub rejected the provided credentials.',
@@ -602,7 +601,7 @@ async function authorizeRequest(
 
 	// GitHub sends 403 for rate limits and policy blocks alike, so this can't
 	// claim the repo doesn't exist — distinguish it from the 404 below
-	if (repoResult.type === 'rate-limited') {
+	if (repositoryResult.type === 'rate-limited') {
 		return {
 			errorResponse: lfsErrorResponse(
 				`GitHub rate-limited or refused the lookup of "${owner}/${repo}". Try again later; if this persists, check your token's access restrictions (e.g. SAML SSO authorization).`,
@@ -612,7 +611,7 @@ async function authorizeRequest(
 		}
 	}
 
-	if (repoResult.type !== 'found') {
+	if (repositoryResult.type !== 'found') {
 		return {
 			errorResponse: lfsErrorResponse(
 				`No GitHub repository found for "${owner}/${repo}".`,
@@ -622,28 +621,26 @@ async function authorizeRequest(
 		}
 	}
 
-	const ownerResponse = resolvedOwnerForbiddenResponse(repoResult.repoInfo, env, requestId)
+	const ownerResponse = resolvedOwnerForbiddenResponse(repositoryResult.repoInfo, env, requestId)
 	if (ownerResponse !== undefined) {
 		return { errorResponse: ownerResponse }
 	}
 
 	const permissions = {
-		pull: repoResult.repoInfo.permissions?.pull ?? false,
-		push: repoResult.repoInfo.permissions?.push ?? false,
+		pull: repositoryResult.repoInfo.permissions?.pull ?? false,
+		push: repositoryResult.repoInfo.permissions?.push ?? false,
 	}
 
 	// The numeric GitHub repo ID keys the storage prefix to prevent side-channel
 	// attacks while remaining robust to repo name changes — GitHub's rename
 	// redirects preserve authorization continuity, but only the immutable,
 	// never-reused ID preserves addressing continuity
-	const storagePrefix = `${githubStoragePrefix}/${repoResult.repoInfo.id}`
+	const storagePrefix = `${githubStoragePrefix}/${repositoryResult.repoInfo.id}`
 	setCachedAuthorization(cacheKey, { permissions, storagePrefix })
 
-	if (!hasOperationPermission(permissions, operation)) {
-		return { errorResponse: operationForbiddenResponse(operation, owner, repo, requestId) }
-	}
-
-	return { storagePrefix }
+	return hasOperationPermission(permissions, operation)
+		? { storagePrefix }
+		: { errorResponse: operationForbiddenResponse(operation, owner, repo, requestId) }
 }
 
 /**
@@ -655,25 +652,23 @@ async function authorizeRequest(
  * indefinite access to the bucket.
  */
 function resolvedOwnerForbiddenResponse(
-	repoInfo: GitHubRepoInfo,
+	repositoryInfo: GitHubRepositoryInfo,
 	env: Env,
 	requestId: string,
 ): Response | undefined {
-	const resolvedOwner = repoInfo.owner.login
-	if (isOwnerAllowed(resolvedOwner, env.GITHUB_ALLOWED_OWNERS)) {
-		return undefined
-	}
-
-	return lfsErrorResponse(
-		`Repository "${repoInfo.full_name}" is owned by "${resolvedOwner}", which is not allowed to use this LFS server.`,
-		requestId,
-		403,
-	)
+	const resolvedOwner = repositoryInfo.owner.login
+	return isOwnerAllowed(resolvedOwner, env.GITHUB_ALLOWED_OWNERS)
+		? undefined
+		: lfsErrorResponse(
+				`Repository "${repositoryInfo.full_name}" is owned by "${resolvedOwner}", which is not allowed to use this LFS server.`,
+				requestId,
+				403,
+			)
 }
 
 async function authorizeAnonymousDownload(
 	owner: string,
-	repo: string,
+	repository: string,
 	env: Env,
 	requestId: string,
 ): Promise<AuthorizationResult> {
@@ -681,14 +676,14 @@ async function authorizeAnonymousDownload(
 	// successful lookup is proof of public visibility. Cached like credentialed
 	// authorizations; the "anonymous:" prefix can't collide with the hex
 	// credential hashes used as cache keys
-	const cacheKey = `anonymous:${owner.toLowerCase()}/${repo.toLowerCase()}`
+	const cacheKey = `anonymous:${owner.toLowerCase()}/${repository.toLowerCase()}`
 	const cached = getCachedAuthorization(cacheKey)
 	if (cached !== undefined) {
 		return { storagePrefix: cached.storagePrefix }
 	}
 
-	const repoResult = await getGitHubRepoInfo(owner, repo, undefined)
-	if (repoResult.type === 'rate-limited') {
+	const repositoryResult = await getGitHubRepositoryInfo(owner, repository, undefined)
+	if (repositoryResult.type === 'rate-limited') {
 		// Unauthenticated GitHub API calls share a per-IP rate limit across
 		// Workers tenants, so fall back to asking for credentials
 		return {
@@ -701,10 +696,10 @@ async function authorizeAnonymousDownload(
 		}
 	}
 
-	if (repoResult.type !== 'found') {
+	if (repositoryResult.type !== 'found') {
 		return {
 			errorResponse: lfsErrorResponse(
-				`No public GitHub repository found for "${owner}/${repo}". Authenticate to access private repositories.`,
+				`No public GitHub repository found for "${owner}/${repository}". Authenticate to access private repositories.`,
 				requestId,
 				401,
 				unauthorizedHeaders,
@@ -712,12 +707,12 @@ async function authorizeAnonymousDownload(
 		}
 	}
 
-	const ownerResponse = resolvedOwnerForbiddenResponse(repoResult.repoInfo, env, requestId)
+	const ownerResponse = resolvedOwnerForbiddenResponse(repositoryResult.repoInfo, env, requestId)
 	if (ownerResponse !== undefined) {
 		return { errorResponse: ownerResponse }
 	}
 
-	const storagePrefix = `${githubStoragePrefix}/${repoResult.repoInfo.id}`
+	const storagePrefix = `${githubStoragePrefix}/${repositoryResult.repoInfo.id}`
 	setCachedAuthorization(cacheKey, { permissions: { pull: true, push: false }, storagePrefix })
 	return { storagePrefix }
 }
@@ -725,11 +720,11 @@ async function authorizeAnonymousDownload(
 function operationForbiddenResponse(
 	operation: 'download' | 'upload',
 	owner: string,
-	repo: string,
+	repository: string,
 	requestId: string,
 ): Response {
 	return lfsErrorResponse(
-		`Not authorized to ${operation} in repository "${owner}/${repo}". Check permissions on your GitHub personal access token.`,
+		`Not authorized to ${operation} in repository "${owner}/${repository}". Check permissions on your GitHub personal access token.`,
 		requestId,
 		403,
 	)
@@ -746,7 +741,7 @@ async function authorizeGitHubActionsToken(
 	token: string,
 	audience: string,
 	owner: string,
-	repo: string,
+	repository: string,
 	operation: 'download' | 'upload',
 	requestId: string,
 ): Promise<AuthorizationResult> {
@@ -770,14 +765,14 @@ async function authorizeGitHubActionsToken(
 	}
 
 	// The cryptographically verified repo identity must match the request path
-	const claimedRepo = payload.repository
+	const claimedRepository = payload.repository
 	if (
-		typeof claimedRepo !== 'string' ||
-		claimedRepo.toLowerCase() !== `${owner}/${repo}`.toLowerCase()
+		typeof claimedRepository !== 'string' ||
+		claimedRepository.toLowerCase() !== `${owner}/${repository}`.toLowerCase()
 	) {
 		return {
 			errorResponse: lfsErrorResponse(
-				`OIDC token was not issued for repository "${owner}/${repo}".`,
+				`OIDC token was not issued for repository "${owner}/${repository}".`,
 				requestId,
 				403,
 			),
@@ -797,8 +792,8 @@ async function authorizeGitHubActionsToken(
 
 	// The same numeric repo ID the GitHub API reports, so both GitHub auth
 	// paths address the same storage namespace
-	const repoId = Number(payload.repository_id)
-	if (!Number.isInteger(repoId) || repoId <= 0) {
+	const repositoryId = Number(payload.repository_id)
+	if (!Number.isInteger(repositoryId) || repositoryId <= 0) {
 		return {
 			errorResponse: lfsErrorResponse(
 				'OIDC token is missing a valid repository_id claim.',
@@ -808,14 +803,14 @@ async function authorizeGitHubActionsToken(
 		}
 	}
 
-	return { storagePrefix: `${githubStoragePrefix}/${repoId}` }
+	return { storagePrefix: `${githubStoragePrefix}/${repositoryId}` }
 }
 
 async function authorizeSelfIssuedToken(
 	token: string,
 	audience: string,
 	env: Env,
-	address: RepoAddress,
+	address: RepositoryAddress,
 	operation: 'download' | 'upload',
 	requestId: string,
 ): Promise<AuthorizationResult> {
@@ -1010,16 +1005,16 @@ function getCredential(request: Request): string | undefined {
 	}
 }
 
-async function getGitHubRepoInfo(
+async function getGitHubRepositoryInfo(
 	owner: string,
-	repo: string,
+	repository: string,
 	personalAccessToken: string | undefined,
-): Promise<GitHubRepoResult> {
+): Promise<GitHubRepositoryResult> {
 	try {
 		const octokit = new Octokit({
 			auth: personalAccessToken,
 		})
-		const { data } = await octokit.repos.get({ owner, repo })
+		const { data } = await octokit.repos.get({ owner, repo: repository })
 		return { repoInfo: data, type: 'found' }
 	} catch (error) {
 		// Distinguish bad credentials from missing/inaccessible repos so clients

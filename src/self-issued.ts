@@ -19,14 +19,14 @@ const safeNameRegex = /^[\w.\-]+$/v
  * dashes — the claim becomes a storage key prefix, so this rules out path
  * traversal and URL-delimiter surprises.
  */
-export function isValidRepoName(name: string): boolean {
+export function isValidRepositoryName(name: string): boolean {
 	return safeNameRegex.test(name) && name !== '.' && name !== '..'
 }
 
 /** Accepts only `<owner>/<name>` GitHub repo paths built from safe segments. */
-export function isValidGitHubRepoPath(repo: string): boolean {
-	const segments = repo.split('/')
-	return segments.length === 2 && segments.every((segment) => isValidRepoName(segment))
+export function isValidGitHubRepositoryPath(repository: string): boolean {
+	const segments = repository.split('/')
+	return segments.length === 2 && segments.every((segment) => isValidRepositoryName(segment))
 }
 
 /** Claims a self-issued token must carry beyond the registered iss/aud/exp. */
@@ -36,7 +36,7 @@ export const selfIssuedTokenClaimsSchema = z.object({
 	repo: z
 		.string()
 		.refine(
-			isValidRepoName,
+			isValidRepositoryName,
 			'must be a single-segment repository name using letters, numbers, ".", "_", or "-"',
 		),
 })
@@ -55,5 +55,5 @@ export const selfIssuedGitHubGrantClaimsSchema = z.object({
 	push: z.boolean(),
 	repo: z
 		.string()
-		.refine(isValidGitHubRepoPath, 'must be an "<owner>/<name>" GitHub repository path'),
+		.refine(isValidGitHubRepositoryPath, 'must be an "<owner>/<name>" GitHub repository path'),
 })

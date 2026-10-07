@@ -31,7 +31,7 @@ const objectSizeRegex = /<Size>(?<size>\d+)<\/Size>/v
 const continuationTokenRegex = /<NextContinuationToken>(?<token>[^<]+)<\/NextContinuationToken>/v
 const numericPrefixRegex = /^\d+$/v
 
-const gitHubRepoSchema = z.object({ full_name: z.string().optional() })
+const gitHubRepositorySchema = z.object({ full_name: z.string().optional() })
 
 type BucketConfig = {
 	bucket: string
@@ -164,14 +164,12 @@ function getPrefix(key: string): string {
 	// Storage is namespaced as <provider>/<stable-id>/<oid>: github.com/<id>
 	// for GitHub repos, self/<name> for self-issued repos
 	const segments = key.split('/')
-	if ((segments[0] === 'github.com' || segments[0] === 'self') && segments.length > 1) {
-		return `${segments[0]}/${segments[1] ?? ''}`
-	}
-
-	return segments[0] ?? key
+	return (segments[0] === 'github.com' || segments[0] === 'self') && segments.length > 1
+		? `${segments[0]}/${segments[1] ?? ''}`
+		: (segments[0] ?? key)
 }
 
-async function resolveGitHubRepo(
+async function resolveGitHubRepository(
 	id: string,
 	token: string | undefined,
 ): Promise<{ repo: string; status: PrefixReport['status'] }> {
@@ -197,7 +195,7 @@ async function resolveGitHubRepo(
 		return { repo: `(GitHub error ${response.status})`, status: 'error' }
 	}
 
-	const data = gitHubRepoSchema.safeParse(await response.json())
+	const data = gitHubRepositorySchema.safeParse(await response.json())
 	return { repo: (data.success ? data.data.full_name : undefined) ?? '(unnamed)', status: 'ok' }
 }
 
@@ -295,7 +293,7 @@ if (objects.length === 0) {
 				return { ...stats, prefix, repo: '(unrecognized prefix)', status: 'error' as const }
 			}
 
-			const resolved = await resolveGitHubRepo(githubId, token)
+			const resolved = await resolveGitHubRepository(githubId, token)
 			return { ...stats, prefix, ...resolved }
 		}),
 	)

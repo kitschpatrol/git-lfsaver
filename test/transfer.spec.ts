@@ -19,7 +19,7 @@ import { selfIssuedTokenIssuer } from '../src/self-issued'
 const mime = 'application/vnd.git-lfs+json'
 const oidA = 'a'.repeat(64)
 const oidB = 'b'.repeat(64)
-const repoId = 12_345_678
+const repositoryId = 12_345_678
 
 // Must match the fake bindings in vitest.config.ts
 const bucketOrigin = 'https://test-bucket.example.r2.cloudflarestorage.com'
@@ -55,8 +55,8 @@ const selfIssuedPrivateKey = await importJWK(
 )
 // Self-issued repos are addressed by a bare single-segment name that is
 // deliberately absent from GITHUB_ALLOWED_OWNERS — the signed token alone authorizes
-const selfIssuedRepoName = 'local-repo'
-const selfIssuedStoragePrefix = `self/${selfIssuedRepoName}`
+const selfIssuedRepositoryName = 'local-repo'
+const selfIssuedStoragePrefix = `self/${selfIssuedRepositoryName}`
 
 // The worker under test runs in the same isolate as the tests, so stubbing
 // global fetch intercepts its outbound GitHub and R2 subrequests. Each mock is
@@ -104,17 +104,19 @@ afterEach(() => {
 	const persistent = pendingMocks.filter((mock) => mock.isPersistent === true)
 	pendingMocks.length = 0
 	pendingMocks.push(...persistent)
-	if (leftover.length > 0) {
-		const routes = leftover.map((mock) => `${mock.method} ${mock.url}`).join(', ')
-		throw new Error(`Unconsumed fetch mocks: ${routes}`)
+	if (leftover.length === 0) {
+		return
 	}
+
+	const routes = leftover.map((mock) => `${mock.method} ${mock.url}`).join(', ')
+	throw new Error(`Unconsumed fetch mocks: ${routes}`)
 })
 
 afterAll(() => {
 	vi.unstubAllGlobals()
 })
 
-function mockGitHubRepo(
+function mockGitHubRepository(
 	permissions?: { pull: boolean; push: boolean },
 	// The owner GitHub resolves after following redirects, which may differ
 	// from the owner in the request path after a rename or transfer
@@ -125,7 +127,7 @@ function mockGitHubRepo(
 		response: () =>
 			Response.json({
 				full_name: `${owner}/repo`,
-				id: repoId,
+				id: repositoryId,
 				owner: { login: owner },
 				permissions,
 			}),
@@ -145,7 +147,7 @@ function mockObjectHead(
 	oid: string,
 	status: number,
 	contentLength = 0,
-	storagePrefix = `github.com/${repoId}`,
+	storagePrefix = `github.com/${repositoryId}`,
 ): void {
 	pendingMocks.push({
 		method: 'HEAD',
@@ -162,7 +164,11 @@ async function signOidcToken(
 	claims: Record<string, unknown> = {},
 	options: { audience?: string; expiresAt?: number | string; issuer?: string } = {},
 ): Promise<string> {
-	return new SignJWT({ repository: 'kitschpatrol/repo', repository_id: String(repoId), ...claims })
+	return new SignJWT({
+		repository: 'kitschpatrol/repo',
+		repository_id: String(repositoryId),
+		...claims,
+	})
 		.setProtectedHeader({ alg: 'RS256', kid: 'test-key' })
 		.setIssuer(options.issuer ?? githubActionsIssuer)
 		.setAudience(options.audience ?? 'example.com')
@@ -185,7 +191,7 @@ async function signSelfIssuedToken(
 		omitExpiry?: boolean
 	} = {},
 ): Promise<string> {
-	const jwt = new SignJWT({ pull: true, push: true, repo: selfIssuedRepoName, ...claims })
+	const jwt = new SignJWT({ pull: true, push: true, repo: selfIssuedRepositoryName, ...claims })
 		.setProtectedHeader({ alg: 'EdDSA' })
 		.setIssuer(selfIssuedTokenIssuer)
 		.setAudience(options.audience ?? 'example.com')
@@ -227,17 +233,17 @@ async function postSelfBatch(
 	objects: Array<{ oid: string; size: number }>,
 	headers?: Record<string, string>,
 ): Promise<Response> {
-	return post(`/${selfIssuedRepoName}/objects/batch`, { objects, operation }, headers)
+	return post(`/${selfIssuedRepositoryName}/objects/batch`, { objects, operation }, headers)
 }
 
 async function parseBatchResponse(response: Response): Promise<GitLfsBatchResponse> {
 	return gitLfsBatchResponseSchema.parse(await response.json())
 }
 
-function getSuccessObject(response: GitLfsBatchResponse, oid: string): GitLfsBatchResponseObject {
-	const object = response.objects.find((entry) => entry.oid === oid)
+function getSuccessObject(response: GitLfsBatchResponse): GitLfsBatchResponseObject {
+	const object = response.objects.find((entry) => entry.oid === oidA)
 	if (object === undefined || 'error' in object) {
-		throw new Error(`Expected success object for oid ${oid}`)
+		throw new Error(`Expected success object for oid ${oidA}`)
 	}
 
 	return object
@@ -257,33 +263,33 @@ function getErrorObject(
 
 describe('permission matrix', () => {
 	it('allows download with pull permission', async () => {
-		mockGitHubRepo({ pull: true, push: false })
+		mockGitHubRepository({ pull: true, push: false })
 		mockObjectHead(oidA, 200, 8)
 		const response = await postBatch('download', [{ oid: oidA, size: 8 }])
 		expect(response.status).toBe(200)
 	})
 
 	it('denies download without pull permission', async () => {
-		mockGitHubRepo({ pull: false, push: false })
+		mockGitHubRepository({ pull: false, push: false })
 		const response = await postBatch('download', [{ oid: oidA, size: 8 }])
 		expect(response.status).toBe(403)
 	})
 
 	it('allows upload with push permission', async () => {
-		mockGitHubRepo({ pull: true, push: true })
+		mockGitHubRepository({ pull: true, push: true })
 		mockObjectHead(oidA, 404)
 		const response = await postBatch('upload', [{ oid: oidA, size: 8 }])
 		expect(response.status).toBe(200)
 	})
 
 	it('denies upload without push permission', async () => {
-		mockGitHubRepo({ pull: true, push: false })
+		mockGitHubRepository({ pull: true, push: false })
 		const response = await postBatch('upload', [{ oid: oidA, size: 8 }])
 		expect(response.status).toBe(403)
 	})
 
 	it('denies access when GitHub omits permissions', async () => {
-		mockGitHubRepo()
+		mockGitHubRepository()
 		const response = await postBatch('download', [{ oid: oidA, size: 8 }])
 		expect(response.status).toBe(403)
 	})
@@ -318,7 +324,7 @@ describe('resolved owner allowlist', () => {
 	it('rejects a repo transferred out of the allowlist despite the redirect', async () => {
 		// The path's owner passes the allowlist, but GitHub's redirect resolves
 		// to an owner that doesn't — the transferred repo must not retain access
-		mockGitHubRepo({ pull: true, push: true }, 'new-owner')
+		mockGitHubRepository({ pull: true, push: true }, 'new-owner')
 		const response = await postBatch('download', [{ oid: oidA, size: 8 }])
 		expect(response.status).toBe(403)
 	})
@@ -326,7 +332,7 @@ describe('resolved owner allowlist', () => {
 
 describe('download batch', () => {
 	it('signs a download URL for a stored object', async () => {
-		mockGitHubRepo({ pull: true, push: false })
+		mockGitHubRepository({ pull: true, push: false })
 		mockObjectHead(oidA, 200, 8)
 		const response = await postBatch('download', [{ oid: oidA, size: 8 }])
 		expect(response.status).toBe(200)
@@ -336,7 +342,7 @@ describe('download batch', () => {
 		expect(body.transfer).toBe('basic')
 		expect(body.hash_algo).toBe('sha256')
 
-		const object = getSuccessObject(body, oidA)
+		const object = getSuccessObject(body)
 		expect(object.authenticated).toBe(true)
 		const download = object.actions?.download
 		if (download === undefined) {
@@ -346,7 +352,7 @@ describe('download batch', () => {
 		expect(download.expires_in).toBe(env.EXPIRY)
 		const url = new URL(download.href)
 		expect(url.origin).toBe(bucketOrigin)
-		expect(url.pathname).toBe(`/github.com/${repoId}/${oidA}`)
+		expect(url.pathname).toBe(`/github.com/${repositoryId}/${oidA}`)
 		expect(url.searchParams.get('X-Amz-Expires')).toBe(String(env.EXPIRY))
 		expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe('host')
 		expect(url.searchParams.get('X-Amz-Credential')?.startsWith(`${readKeyId}/`)).toBe(true)
@@ -354,7 +360,7 @@ describe('download batch', () => {
 	})
 
 	it('returns a per-object 404 for missing objects', async () => {
-		mockGitHubRepo({ pull: true, push: false })
+		mockGitHubRepository({ pull: true, push: false })
 		mockObjectHead(oidA, 404)
 		const response = await postBatch('download', [{ oid: oidA, size: 8 }])
 		expect(response.status).toBe(200)
@@ -363,7 +369,7 @@ describe('download batch', () => {
 	})
 
 	it('handles mixed batches of stored and missing objects', async () => {
-		mockGitHubRepo({ pull: true, push: false })
+		mockGitHubRepository({ pull: true, push: false })
 		mockObjectHead(oidA, 200, 8)
 		mockObjectHead(oidB, 404)
 		const response = await postBatch('download', [
@@ -371,12 +377,12 @@ describe('download batch', () => {
 			{ oid: oidB, size: 16 },
 		])
 		const body = await parseBatchResponse(response)
-		expect(getSuccessObject(body, oidA).actions?.download).toBeDefined()
+		expect(getSuccessObject(body).actions?.download).toBeDefined()
 		expect(getErrorObject(body, oidB).error.code).toBe(404)
 	})
 
 	it('returns a per-object 502 instead of signing when storage errors', async () => {
-		mockGitHubRepo({ pull: true, push: false })
+		mockGitHubRepository({ pull: true, push: false })
 		mockObjectHead(oidA, 500)
 		const response = await postBatch('download', [{ oid: oidA, size: 8 }])
 		expect(response.status).toBe(200)
@@ -387,24 +393,24 @@ describe('download batch', () => {
 	it('signs downloads for stored objects larger than MAX_UPLOAD_FILE_SIZE', async () => {
 		// The size cap applies to uploads only: lowering MAX_UPLOAD_FILE_SIZE
 		// must not strand objects already in storage
-		mockGitHubRepo({ pull: true, push: false })
+		mockGitHubRepository({ pull: true, push: false })
 		const oversize = env.MAX_UPLOAD_FILE_SIZE + 1
 		mockObjectHead(oidA, 200, oversize)
 		const response = await postBatch('download', [{ oid: oidA, size: oversize }])
 		expect(response.status).toBe(200)
 		const body = await parseBatchResponse(response)
-		expect(getSuccessObject(body, oidA).actions?.download).toBeDefined()
+		expect(getSuccessObject(body).actions?.download).toBeDefined()
 	})
 })
 
 describe('upload batch', () => {
 	it('signs an upload URL with the size constrained and a verify action', async () => {
-		mockGitHubRepo({ pull: true, push: true })
+		mockGitHubRepository({ pull: true, push: true })
 		mockObjectHead(oidA, 404)
 		const response = await postBatch('upload', [{ oid: oidA, size: 8 }])
 		const body = await parseBatchResponse(response)
 
-		const object = getSuccessObject(body, oidA)
+		const object = getSuccessObject(body)
 		const upload = object.actions?.upload
 		if (upload === undefined) {
 			throw new Error('Expected upload action')
@@ -412,7 +418,7 @@ describe('upload batch', () => {
 
 		const url = new URL(upload.href)
 		expect(url.origin).toBe(bucketOrigin)
-		expect(url.pathname).toBe(`/github.com/${repoId}/${oidA}`)
+		expect(url.pathname).toBe(`/github.com/${repositoryId}/${oidA}`)
 		// Content-length caps the PUT's size and the signed content hash pins
 		// its bytes to the OID
 		expect(url.searchParams.get('X-Amz-SignedHeaders')).toBe(
@@ -427,30 +433,30 @@ describe('upload batch', () => {
 	})
 
 	it('omits actions for objects already stored with a matching size', async () => {
-		mockGitHubRepo({ pull: true, push: true })
+		mockGitHubRepository({ pull: true, push: true })
 		mockObjectHead(oidA, 200, 8)
 		const response = await postBatch('upload', [{ oid: oidA, size: 8 }])
 		const body = await parseBatchResponse(response)
-		expect(getSuccessObject(body, oidA).actions).toBeUndefined()
+		expect(getSuccessObject(body).actions).toBeUndefined()
 	})
 
 	it('re-signs an upload when the stored size differs', async () => {
-		mockGitHubRepo({ pull: true, push: true })
+		mockGitHubRepository({ pull: true, push: true })
 		mockObjectHead(oidA, 200, 4)
 		const response = await postBatch('upload', [{ oid: oidA, size: 8 }])
 		const body = await parseBatchResponse(response)
-		expect(getSuccessObject(body, oidA).actions?.upload).toBeDefined()
+		expect(getSuccessObject(body).actions?.upload).toBeDefined()
 	})
 
 	it('returns a per-object 413 for oversize objects', async () => {
-		mockGitHubRepo({ pull: true, push: true })
+		mockGitHubRepository({ pull: true, push: true })
 		const response = await postBatch('upload', [{ oid: oidA, size: env.MAX_UPLOAD_FILE_SIZE + 1 }])
 		const body = await parseBatchResponse(response)
 		expect(getErrorObject(body, oidA).error.code).toBe(413)
 	})
 
 	it('returns a per-object 502 instead of signing when storage errors', async () => {
-		mockGitHubRepo({ pull: true, push: true })
+		mockGitHubRepository({ pull: true, push: true })
 		mockObjectHead(oidA, 503)
 		const response = await postBatch('upload', [{ oid: oidA, size: 8 }])
 		const body = await parseBatchResponse(response)
@@ -460,21 +466,21 @@ describe('upload batch', () => {
 
 describe('verify endpoint', () => {
 	it('confirms objects stored with the expected size', async () => {
-		mockGitHubRepo({ pull: true, push: true })
+		mockGitHubRepository({ pull: true, push: true })
 		mockObjectHead(oidA, 200, 8)
 		const response = await post('/kitschpatrol/repo/objects/verify', { oid: oidA, size: 8 })
 		expect(response.status).toBe(200)
 	})
 
 	it('returns 404 when the uploaded object is missing', async () => {
-		mockGitHubRepo({ pull: true, push: true })
+		mockGitHubRepository({ pull: true, push: true })
 		mockObjectHead(oidA, 404)
 		const response = await post('/kitschpatrol/repo/objects/verify', { oid: oidA, size: 8 })
 		expect(response.status).toBe(404)
 	})
 
 	it('returns 422 when the stored size differs', async () => {
-		mockGitHubRepo({ pull: true, push: true })
+		mockGitHubRepository({ pull: true, push: true })
 		mockObjectHead(oidA, 200, 4)
 		const response = await post('/kitschpatrol/repo/objects/verify', { oid: oidA, size: 8 })
 		expect(response.status).toBe(422)
@@ -483,13 +489,13 @@ describe('verify endpoint', () => {
 	})
 
 	it('requires push permission to verify', async () => {
-		mockGitHubRepo({ pull: true, push: false })
+		mockGitHubRepository({ pull: true, push: false })
 		const response = await post('/kitschpatrol/repo/objects/verify', { oid: oidA, size: 8 })
 		expect(response.status).toBe(403)
 	})
 
 	it('returns 502 instead of "not found" when storage errors', async () => {
-		mockGitHubRepo({ pull: true, push: true })
+		mockGitHubRepository({ pull: true, push: true })
 		mockObjectHead(oidA, 500)
 		const response = await post('/kitschpatrol/repo/objects/verify', { oid: oidA, size: 8 })
 		expect(response.status).toBe(502)
@@ -501,7 +507,7 @@ describe('authorization cache', () => {
 		const headers = patAuthHeader('reused-token')
 		// A single GitHub response is mocked for two batches: a second API
 		// call would throw on the unmatched fetch
-		mockGitHubRepo({ pull: true, push: false })
+		mockGitHubRepository({ pull: true, push: false })
 		mockObjectHead(oidA, 200, 8)
 		mockObjectHead(oidA, 200, 8)
 
@@ -514,7 +520,7 @@ describe('authorization cache', () => {
 
 	it('applies cached permissions to later operations', async () => {
 		const headers = patAuthHeader('pull-only-token')
-		mockGitHubRepo({ pull: true, push: false })
+		mockGitHubRepository({ pull: true, push: false })
 		mockObjectHead(oidA, 200, 8)
 
 		const download = await postBatch('download', [{ oid: oidA, size: 8 }], headers)
@@ -534,7 +540,7 @@ describe('github actions oidc authentication', () => {
 		const response = await postBatch('download', [{ oid: oidA, size: 8 }], oidcAuthHeader(token))
 		expect(response.status).toBe(200)
 		const body = await parseBatchResponse(response)
-		expect(getSuccessObject(body, oidA).actions?.download).toBeDefined()
+		expect(getSuccessObject(body).actions?.download).toBeDefined()
 	})
 
 	it('rejects uploads', async () => {
@@ -597,7 +603,7 @@ describe('self-issued token authentication', () => {
 		expect(response.status).toBe(200)
 
 		const body = await parseBatchResponse(response)
-		const download = getSuccessObject(body, oidA).actions?.download
+		const download = getSuccessObject(body).actions?.download
 		if (download === undefined) {
 			throw new Error('Expected download action')
 		}
@@ -614,7 +620,7 @@ describe('self-issued token authentication', () => {
 		expect(response.status).toBe(200)
 
 		const body = await parseBatchResponse(response)
-		const object = getSuccessObject(body, oidA)
+		const object = getSuccessObject(body)
 		const upload = object.actions?.upload
 		if (upload === undefined) {
 			throw new Error('Expected upload action')
@@ -623,7 +629,7 @@ describe('self-issued token authentication', () => {
 		expect(new URL(upload.href).pathname).toBe(`/${selfIssuedStoragePrefix}/${oidA}`)
 		// The verify action must use the single-segment URL shape too
 		expect(object.actions?.verify?.href).toBe(
-			`https://example.com/${selfIssuedRepoName}/objects/verify`,
+			`https://example.com/${selfIssuedRepositoryName}/objects/verify`,
 		)
 	})
 
@@ -631,7 +637,7 @@ describe('self-issued token authentication', () => {
 		mockObjectHead(oidA, 200, 8, selfIssuedStoragePrefix)
 		const token = await signSelfIssuedToken()
 		const response = await post(
-			`/${selfIssuedRepoName}/objects/verify`,
+			`/${selfIssuedRepositoryName}/objects/verify`,
 			{ oid: oidA, size: 8 },
 			oidcAuthHeader(token),
 		)
@@ -752,7 +758,7 @@ describe('self-issued token authentication', () => {
 	it('rejects tokens when no public key is configured', async () => {
 		const token = await signSelfIssuedToken()
 		const request = new Request<unknown, IncomingRequestCfProperties>(
-			`https://example.com/${selfIssuedRepoName}/objects/batch`,
+			`https://example.com/${selfIssuedRepositoryName}/objects/batch`,
 			{
 				body: JSON.stringify({ objects: [{ oid: oidA, size: 8 }], operation: 'download' }),
 				headers: { Accept: mime, 'Content-Type': mime, ...oidcAuthHeader(token) },
@@ -773,7 +779,7 @@ describe('self-issued token authentication', () => {
 describe('self-issued github grant authentication', () => {
 	// An explicit grant carries the GitHub repo's numeric ID and is presented
 	// on the same owner-qualified URL every other collaborator uses
-	const grantClaims = { github_repo_id: repoId, repo: 'kitschpatrol/repo' }
+	const grantClaims = { github_repo_id: repositoryId, repo: 'kitschpatrol/repo' }
 
 	it('allows downloads from the GitHub storage prefix with no GitHub API call', async () => {
 		// No GitHub API mock is registered: an unexpected call would throw
@@ -783,13 +789,13 @@ describe('self-issued github grant authentication', () => {
 		expect(response.status).toBe(200)
 
 		const body = await parseBatchResponse(response)
-		const download = getSuccessObject(body, oidA).actions?.download
+		const download = getSuccessObject(body).actions?.download
 		if (download === undefined) {
 			throw new Error('Expected download action')
 		}
 
 		// Same numeric prefix the PAT and OIDC paths resolve — shared storage
-		expect(new URL(download.href).pathname).toBe(`/github.com/${repoId}/${oidA}`)
+		expect(new URL(download.href).pathname).toBe(`/github.com/${repositoryId}/${oidA}`)
 	})
 
 	it('allows uploads with a push grant', async () => {
@@ -799,7 +805,7 @@ describe('self-issued github grant authentication', () => {
 		expect(response.status).toBe(200)
 
 		const body = await parseBatchResponse(response)
-		expect(getSuccessObject(body, oidA).actions?.upload).toBeDefined()
+		expect(getSuccessObject(body).actions?.upload).toBeDefined()
 	})
 
 	it('denies operations the grant does not include', async () => {
@@ -846,43 +852,43 @@ describe('anonymous public repo downloads', () => {
 	// Each test uses a distinct repo name: the anonymous authorization cache is
 	// keyed by repo (not credential), so reuse would couple tests
 
-	function mockPublicRepo(repoName: string, id: number, owner = 'kitschpatrol'): void {
+	function mockPublicRepository(repositoryName: string, id: number, owner = 'kitschpatrol'): void {
 		pendingMocks.push({
 			method: 'GET',
 			response: () =>
-				Response.json({ full_name: `${owner}/${repoName}`, id, owner: { login: owner } }),
-			url: `https://api.github.com/repos/kitschpatrol/${repoName}`,
+				Response.json({ full_name: `${owner}/${repositoryName}`, id, owner: { login: owner } }),
+			url: `https://api.github.com/repos/kitschpatrol/${repositoryName}`,
 		})
 	}
 
-	function mockPublicRepoError(repoName: string, status: number): void {
+	function mockPublicRepositoryError(repositoryName: string, status: number): void {
 		pendingMocks.push({
 			method: 'GET',
 			response: () => Response.json({ message: 'GitHub error' }, { status }),
-			url: `https://api.github.com/repos/kitschpatrol/${repoName}`,
+			url: `https://api.github.com/repos/kitschpatrol/${repositoryName}`,
 		})
 	}
 
 	async function postAnonymous(
-		repoName: string,
+		repositoryName: string,
 		operation: 'download' | 'upload',
 	): Promise<Response> {
 		// Empty headers omit the default PAT Authorization header
 		return post(
-			`/kitschpatrol/${repoName}/objects/batch`,
+			`/kitschpatrol/${repositoryName}/objects/batch`,
 			{ objects: [{ oid: oidA, size: 8 }], operation },
 			{},
 		)
 	}
 
 	it('allows downloads from public repos with no credential', async () => {
-		mockPublicRepo('anon-public', 111)
+		mockPublicRepository('anon-public', 111)
 		mockObjectHead(oidA, 200, 8, 'github.com/111')
 		const response = await postAnonymous('anon-public', 'download')
 		expect(response.status).toBe(200)
 
 		const body = await parseBatchResponse(response)
-		const download = getSuccessObject(body, oidA).actions?.download
+		const download = getSuccessObject(body).actions?.download
 		if (download === undefined) {
 			throw new Error('Expected download action')
 		}
@@ -895,7 +901,7 @@ describe('anonymous public repo downloads', () => {
 	it('caches the public visibility lookup', async () => {
 		// A single GitHub response is mocked for two batches: a second API call
 		// would throw on the unmatched fetch
-		mockPublicRepo('anon-cached', 222)
+		mockPublicRepository('anon-cached', 222)
 		mockObjectHead(oidA, 200, 8, 'github.com/222')
 		mockObjectHead(oidA, 200, 8, 'github.com/222')
 
@@ -907,21 +913,21 @@ describe('anonymous public repo downloads', () => {
 	})
 
 	it('prompts for credentials when the repo is private or missing', async () => {
-		mockPublicRepoError('anon-private', 404)
+		mockPublicRepositoryError('anon-private', 404)
 		const response = await postAnonymous('anon-private', 'download')
 		expect(response.status).toBe(401)
 		expect(response.headers.get('LFS-Authenticate')).toBe('Basic realm="Git LFS"')
 	})
 
 	it('prompts for credentials when the GitHub API rate limit is hit', async () => {
-		mockPublicRepoError('anon-limited', 403)
+		mockPublicRepositoryError('anon-limited', 403)
 		const response = await postAnonymous('anon-limited', 'download')
 		expect(response.status).toBe(401)
 		expect(response.headers.get('LFS-Authenticate')).toBe('Basic realm="Git LFS"')
 	})
 
 	it('rejects anonymous downloads from a repo transferred out of the allowlist', async () => {
-		mockPublicRepo('anon-transferred', 333, 'new-owner')
+		mockPublicRepository('anon-transferred', 333, 'new-owner')
 		const response = await postAnonymous('anon-transferred', 'download')
 		expect(response.status).toBe(403)
 	})
@@ -934,7 +940,7 @@ describe('anonymous public repo downloads', () => {
 
 	it('rejects anonymous requests on single-segment paths', async () => {
 		const response = await post(
-			`/${selfIssuedRepoName}/objects/batch`,
+			`/${selfIssuedRepositoryName}/objects/batch`,
 			{ objects: [{ oid: oidA, size: 8 }], operation: 'download' },
 			{},
 		)
@@ -966,7 +972,7 @@ describe('path parsing', () => {
 
 describe('explicit provider host paths', () => {
 	it('treats /github.com/<owner>/<repo> the same as the two-segment default', async () => {
-		mockGitHubRepo({ pull: true, push: true })
+		mockGitHubRepository({ pull: true, push: true })
 		mockObjectHead(oidA, 404)
 		const response = await post('/github.com/kitschpatrol/repo/objects/batch', {
 			objects: [{ oid: oidA, size: 8 }],
@@ -975,7 +981,7 @@ describe('explicit provider host paths', () => {
 		expect(response.status).toBe(200)
 
 		const body = await parseBatchResponse(response)
-		const object = getSuccessObject(body, oidA)
+		const object = getSuccessObject(body)
 		const upload = object.actions?.upload
 		if (upload === undefined) {
 			throw new Error('Expected upload action')
@@ -983,14 +989,14 @@ describe('explicit provider host paths', () => {
 
 		// Storage resolves to the same provider-namespaced prefix as the
 		// two-segment form, and the verify URL echoes the explicit host shape
-		expect(new URL(upload.href).pathname).toBe(`/github.com/${repoId}/${oidA}`)
+		expect(new URL(upload.href).pathname).toBe(`/github.com/${repositoryId}/${oidA}`)
 		expect(object.actions?.verify?.href).toBe(
 			'https://example.com/github.com/kitschpatrol/repo/objects/verify',
 		)
 	})
 
 	it('matches the host case-insensitively', async () => {
-		mockGitHubRepo({ pull: true, push: false })
+		mockGitHubRepository({ pull: true, push: false })
 		mockObjectHead(oidA, 200, 8)
 		const response = await post('/GitHub.com/kitschpatrol/repo/objects/batch', {
 			objects: [{ oid: oidA, size: 8 }],

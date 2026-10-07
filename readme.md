@@ -9,7 +9,7 @@
 
 <!-- short-description -->
 
-**A serverless Git LFS server for Cloudflare Workers + R2 with seamless GitHub auth.**
+**Serverless Git LFS server for Cloudflare Workers + R2 with seamless GitHub auth.**
 
 <!-- /short-description -->
 

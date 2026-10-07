@@ -2,12 +2,8 @@ import { knipConfig } from '@kitschpatrol/knip-config'
 
 export default knipConfig({
 	ignore: [
-		// Ignore unlisted dependency in test files
+		// Knip reports the spec files as unused rather than as Vitest entries
 		'test/*.spec.ts',
 		'src/schemas.ts',
-	],
-	ignoreDependencies: [
-		// Ignore cloudflare as unlisted dependency
-		'cloudflare',
 	],
 })
