@@ -260,11 +260,11 @@ if (token === undefined && !values.json) {
 
 const objects = await listObjects(config)
 if (objects.length === 0) {
-	if (values.json) {
-		console.log(JSON.stringify({ prefixes: [], totals: { bytes: 0, objects: 0 } }, undefined, 2))
-	} else {
-		console.log(`Bucket "${config.bucket}" is empty.`)
-	}
+	console.log(
+		values.json
+			? JSON.stringify({ prefixes: [], totals: { bytes: 0, objects: 0 } }, undefined, 2)
+			: `Bucket "${config.bucket}" is empty.`,
+	)
 } else {
 	const groups = new Map<string, { bytes: number; objects: number }>()
 	for (const object of objects) {

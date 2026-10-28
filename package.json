@@ -29,14 +29,13 @@
 	"scripts": {
 		"audit": "node scripts/audit.ts",
 		"build": "node scripts/version.ts",
-		"clean-deep": "shx rm -f pnpm-lock.yaml && git clean -fdX -e !.claude/",
+		"clean-deep": "shx rm -f pnpm-lock.yaml && git clean -fdX",
 		"deploy": "pnpm run build && wrangler deploy --secrets-file .env",
 		"dev": "wrangler types && wrangler dev",
-		"fix": "ksc fix --skip repo",
+		"fix": "pnpm build && ksc fix --skip repo",
 		"init": "op inject -i .template.env -o .env",
-		"lint": "ksc lint --skip repo",
-		"prepare": "skills experimental_sync -y -f",
-		"release": "bumpp -c 'Release: %s'",
+		"lint": "pnpm build && ksc lint --skip repo",
+		"release": "pnpm build && bumpp -c 'Release: %s'",
 		"test": "vitest run",
 		"token": "node scripts/token.ts"
 	},
@@ -48,15 +47,14 @@
 	},
 	"devDependencies": {
 		"@cloudflare/vitest-plugin": "^1.4.0",
-		"@kitschpatrol/shared-config": "^8.13.1",
+		"@kitschpatrol/shared-config": "^8.14.0",
 		"bumpp": "^12.3.0",
 		"shx": "^0.4.0",
-		"skills": "^1.7.2",
 		"typescript": "~6.0.3",
 		"vitest": "^5.0.3",
 		"wrangler": "^4.149.0"
 	},
-	"packageManager": "pnpm@12.11.2",
+	"packageManager": "pnpm@12.15.0",
 	"devEngines": {
 		"runtime": {
 			"name": "node",

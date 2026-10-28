@@ -993,12 +993,8 @@ function getCredential(request: Request): string | undefined {
 		const normalized = decoded.normalize()
 		const colonIndex = normalized.indexOf(':')
 
-		if (colonIndex === -1) {
-			return undefined
-		}
-
-		// Extract and return the credential (part after the colon)
-		return normalized.slice(colonIndex + 1)
+		// The credential is the part after the colon
+		return colonIndex === -1 ? undefined : normalized.slice(colonIndex + 1)
 	} catch {
 		// The atob call throws on invalid base64
 		return undefined
