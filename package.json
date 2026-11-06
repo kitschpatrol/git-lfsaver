@@ -35,7 +35,7 @@
 		"fix": "pnpm build && ksc fix --skip repo",
 		"init": "op inject -i .template.env -o .env",
 		"lint": "pnpm build && ksc lint --skip repo",
-		"release": "pnpm build && bumpp -c 'Release: %s'",
+		"release": "pnpm build && bumpp -c 'Release: %s' --all --execute 'chagent'",
 		"test": "vitest run",
 		"token": "node scripts/token.ts"
 	},
@@ -47,6 +47,7 @@
 	},
 	"devDependencies": {
 		"@cloudflare/vitest-plugin": "^1.4.11",
+		"@kitschpatrol/chagent": "0.4.0",
 		"@kitschpatrol/shared-config": "^8.14.0",
 		"bumpp": "^12.3.0",
 		"shx": "^0.4.0",
